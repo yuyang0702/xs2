@@ -533,6 +533,30 @@ class WorkflowManager(
         from datetime import datetime
         default_name = f"{definition.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         def_dict = definition.to_dict()  # 只序列化一次，后续复用
+        # Keep workflow variable defaults when callers provide only the
+        # user-editable inputs.  File variables are commonly hidden inputs
+        # whose defaults point at artifacts produced by earlier nodes; if the
+        # task is created through the REST API with a partial parameter map,
+        # dropping those defaults leaves downstream placeholders unresolved.
+        task_parameter_values = {
+            variable.key: variable.default
+            for variable in definition.variables
+            if variable.default
+        }
+        if parameter_values:
+            known_parameter_keys = {variable.key for variable in definition.variables}
+            unknown_parameter_keys = sorted(
+                set(parameter_values) - known_parameter_keys
+            )
+            if unknown_parameter_keys:
+                logger.warning(
+                    "Workflow Task 参数包含未知变量: workflow=%s keys=%s",
+                    workflow_id,
+                    unknown_parameter_keys,
+                )
+                return None
+            task_parameter_values.update(parameter_values)
+
         try:
             apply_node_model_overrides(
                 def_dict,
@@ -545,7 +569,7 @@ class WorkflowManager(
             self._freeze_snapshot_definition(
                 workflow_id,
                 def_dict,
-                parameter_values,
+                task_parameter_values,
             )
         except TaskOverrideValidationError as exc:
             logger.info(
@@ -583,7 +607,7 @@ class WorkflowManager(
             status="pending",
             created_at=_now_iso(),
             snapshot_definition=def_dict,  # 保存配对后的定义快照
-            parameter_values=parameter_values or {},
+            parameter_values=task_parameter_values,
             snapshot_variables=def_dict.get("variables", []),
             disabled_node_ids=final_disabled,
             scheme_id=resolved_scheme_id,
