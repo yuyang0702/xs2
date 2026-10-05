@@ -12,6 +12,7 @@ export const CORE_TAB_IDS = [
   "system-prompt",
   "settings",
   "extensions",
+  "novel-workbench",
 ] as const;
 
 export type CoreTabId = (typeof CORE_TAB_IDS)[number];
@@ -35,6 +36,7 @@ export const CORE_PAGE_SCROLL_MODE: Record<CoreTabId, CorePageScrollMode> = {
   "system-prompt": "document",
   settings: "document",
   extensions: "document",
+  "novel-workbench": "document",
 };
 
 const CORE_TAB_ID_SET = new Set<string>(CORE_TAB_IDS);

@@ -356,6 +356,46 @@ async def get_task(workflow_id: str, task_id: str, request: Request):
     return result
 
 
+@router.get("/{workflow_id}/tasks/{task_id}/workspace-file")
+async def get_task_workspace_file(
+    workflow_id: str,
+    task_id: str,
+    request: Request,
+    path: str,
+):
+    """读取任务工作区内的 UTF-8 文本，供本地工作台预览产物。"""
+    mgr = _get_manager(request)
+    task = mgr._load_task(workflow_id, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    workspace = mgr._ws_manager.resolve_workflow_workspace(
+        workflow_id,
+        override=task.workspace_override,
+    ).resolve()
+    from src.core.workspace_guard import WorkspaceGuard
+
+    guard = WorkspaceGuard()
+    checked = guard.validate_path(str(workspace), path)
+    if not checked.allowed:
+        raise HTTPException(status_code=403, detail=checked.reason)
+    target = guard.get_effective_path(str(workspace), path)
+    if target is None or not target.is_file():
+        raise HTTPException(status_code=404, detail="工作区文件不存在")
+    if target.stat().st_size > 2_000_000:
+        raise HTTPException(status_code=413, detail="预览文件超过 2 MB")
+    try:
+        content = target.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=415, detail="文件不是 UTF-8 文本") from exc
+    return {
+        "workflow_id": workflow_id,
+        "task_id": task_id,
+        "path": path,
+        "content": content,
+        "size_bytes": target.stat().st_size,
+    }
+
+
 @router.get("/{workflow_id}/tasks/{task_id}/sessions")
 async def get_task_sessions(workflow_id: str, task_id: str, request: Request):
     """获取工作流任务关联的持久化 session 列表。
