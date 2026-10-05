@@ -27,7 +27,7 @@ type Stage = {
   title: string;
   eyebrow: string;
   description: string;
-  group: "learn" | "plan" | "write" | "extensions";
+  group: "learn" | "plan" | "write" | "review" | "deliver" | "extensions";
   accent: string;
 };
 
@@ -42,7 +42,8 @@ const stages: Stage[] = [
   { id: "outline", workflowId: `${CORE_PREFIX}outline`, title: "卷纲与近纲", eyebrow: "创作前置", description: "将故事规划拆成卷级目标和近期章节推进。", group: "plan", accent: "from-emerald-500/30 to-lime-500/10" },
   { id: "mvp", workflowId: `${CORE_PREFIX}mvp`, title: "章节生产", eyebrow: "正文生产", description: "沿着当前连续性状态生成章节正文并落盘。", group: "write", accent: "from-amber-500/30 to-orange-500/10" },
   { id: "polish", workflowId: `${CORE_PREFIX}polish`, title: "章节润色", eyebrow: "正文生产", description: "完成自审、人文化处理和专业润色。", group: "write", accent: "from-orange-500/30 to-red-500/10" },
-  { id: "post-hoc", workflowId: `${CORE_PREFIX}post-hoc`, title: "章节后验", eyebrow: "正文生产", description: "把本章事实回写到世界、角色、伏笔和叙事债务。", group: "write", accent: "from-red-500/30 to-pink-500/10" },
+  { id: "post-hoc", workflowId: `${CORE_PREFIX}post-hoc`, title: "质量审核与后验", eyebrow: "质量审核", description: "检查章节实现与连续性，再把事实回写到世界、角色、伏笔和叙事债务。", group: "review", accent: "from-red-500/30 to-pink-500/10" },
+  { id: "export", workflowId: `${CORE_PREFIX}export`, title: "导出成品", eyebrow: "导出成品", description: "按章节顺序合并当前工作区正文，生成可交付的成品与导出清单。", group: "deliver", accent: "from-emerald-500/30 to-cyan-500/10" },
 ];
 
 const defaultValues: Record<string, string> = {
@@ -62,6 +63,8 @@ const defaultValues: Record<string, string> = {
   world_intent: "",
   target_word_count: "3000-4000",
   writer_type: "single",
+  output_path: "export/manuscript.md",
+  manifest_path: "export/manifest.json",
 };
 
 const labels: Record<string, string> = {
@@ -81,6 +84,8 @@ const labels: Record<string, string> = {
   world_intent: "世界意图",
   target_word_count: "目标字数",
   writer_type: "写手模式",
+  output_path: "成品路径",
+  manifest_path: "导出清单路径",
 };
 
 function stageIcon(stage: Stage) {
@@ -183,6 +188,7 @@ export default function NovelWorkbenchPage() {
       mvp: ["chapter_number", "prev_chapter", "human_intent", "world_intent", "target_word_count", "writer_type", "language"],
       polish: ["chapter_number", "language"],
       "post-hoc": ["chapter_number", "language"],
+      export: ["output_path", "manifest_path"],
     };
     return fieldMap[activeStageId] || dynamicFields;
   }, [activeStageId, dynamicFields]);
@@ -206,6 +212,8 @@ export default function NovelWorkbenchPage() {
     { key: "learn", title: "资料学习", note: "先提炼，再选择", icon: <BookOpen className="h-4 w-4" /> },
     { key: "plan", title: "创作前置", note: "把想法变成结构", icon: <Sparkles className="h-4 w-4" /> },
     { key: "write", title: "正文生产", note: "章节、润色与后验", icon: <WandSparkles className="h-4 w-4" /> },
+    { key: "review", title: "质量审核", note: "检查连续性并回写", icon: <Check className="h-4 w-4" /> },
+    { key: "deliver", title: "导出成品", note: "生成可交付文件", icon: <ArrowUpRight className="h-4 w-4" /> },
     { key: "extensions", title: "扩展插件", note: "自动发现新工作流", icon: <Boxes className="h-4 w-4" /> },
   ] as const;
   const allStages = [...stages, ...extensionStages];
@@ -258,7 +266,7 @@ export default function NovelWorkbenchPage() {
 
             <section className="rounded-2xl border border-border bg-card p-5"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">当前执行</h3>{task && <span className={`ml-auto rounded-full px-2 py-1 text-[10px] ${task.status === "completed" ? "bg-emerald-400/10 text-emerald-300" : task.status === "failed" ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"}`}>{statusLabel(task.status)}</span>}</div>{task ? <div className="mt-4 space-y-3"><div className="rounded-xl bg-secondary/60 p-3"><p className="text-xs font-medium text-foreground">{task.name || activeStage.title}</p><p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">{task.task_id}</p></div><div className="space-y-2">{["创建任务", "读取工作区", "执行 Agent 与脚本", "写入结果"].map((label, index) => <div key={label} className="flex items-center gap-2 text-xs"><span className={`flex h-5 w-5 items-center justify-center rounded-full ${task.status === "completed" || index < 2 ? "bg-emerald-400/15 text-emerald-300" : "bg-secondary text-muted-foreground"}`}>{task.status === "completed" || index < 2 ? <Check className="h-3 w-3" /> : index + 1}</span><span className={task.status === "completed" || index < 2 ? "text-foreground" : "text-muted-foreground"}>{label}</span></div>)}</div>{task.status === "completed" && <div className="flex items-center gap-2 text-xs text-emerald-300"><Check className="h-4 w-4" />流程已完成，可查看工作区产物</div>}{task.status === "failed" && <div className="flex items-start gap-2 text-xs text-destructive"><CircleAlert className="mt-0.5 h-4 w-4" />{(Object.values(task.node_states || {}) as any[]).find((node) => node.status === "failed")?.error || "流程执行失败"}</div>}<button type="button" onClick={refreshTask} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground"><RefreshCw className="h-3 w-3" />刷新状态</button></div> : <div className="mt-4 rounded-xl border border-dashed border-border p-5 text-center"><FileText className="mx-auto h-6 w-6 text-muted-foreground/60" /><p className="mt-2 text-xs text-muted-foreground">选择一个阶段并运行，执行状态会显示在这里。</p></div>}</section>
 
-            <section className="rounded-2xl border border-border bg-card p-5"><div className="flex items-center gap-2"><ArrowUpRight className="h-4 w-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">建议顺序</h3></div><div className="mt-4 space-y-2 text-xs text-muted-foreground"><p><span className="mr-2 text-primary">01</span>参考资料蒸馏 → 选择写法</p><p><span className="mr-2 text-primary">02</span>世界观 → 角色 → 故事规划</p><p><span className="mr-2 text-primary">03</span>卷纲 → 章节 → 润色 → 后验</p></div></section>
+            <section className="rounded-2xl border border-border bg-card p-5"><div className="flex items-center gap-2"><ArrowUpRight className="h-4 w-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">建议顺序</h3></div><div className="mt-4 space-y-2 text-xs text-muted-foreground"><p><span className="mr-2 text-primary">01</span>参考资料蒸馏 → 选择写法</p><p><span className="mr-2 text-primary">02</span>世界观 → 角色 → 故事规划 → 卷纲</p><p><span className="mr-2 text-primary">03</span>章节生产 → 润色 → 质量审核 → 导出成品</p></div></section>
           </aside>
         </div>
         <footer className="flex items-center gap-2 border-t border-border pt-4 text-xs text-muted-foreground"><Check className="h-3.5 w-3.5 text-emerald-300" />本地运行 · 页面调用 DeterminFlow Core · 结果保存在当前工作区</footer>
