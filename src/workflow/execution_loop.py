@@ -484,12 +484,24 @@ class WorkflowLoopMixin:
                 # 展开并读取文件，保证 Agent 节点拿到的是实际内容，而
                 # 不是未替换的占位符。
                 for variable in definition.variables:
-                    if not isinstance(variable, dict):
+                    var_key = str(
+                        variable.get("key")
+                        if isinstance(variable, dict)
+                        else getattr(variable, "key", "")
+                        or ""
+                    )
+                    var_type = (
+                        variable.get("type", "text")
+                        if isinstance(variable, dict)
+                        else getattr(variable, "type", "text")
+                    )
+                    if not var_key or var_type != "file":
                         continue
-                    var_key = str(variable.get("key") or "")
-                    if not var_key or variable.get("type", "text") != "file":
-                        continue
-                    default = variable.get("default")
+                    default = (
+                        variable.get("default")
+                        if isinstance(variable, dict)
+                        else getattr(variable, "default", "")
+                    )
                     if not isinstance(default, str) or "{{" not in default:
                         continue
                     task.parameter_values[var_key] = default
