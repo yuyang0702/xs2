@@ -14,11 +14,13 @@ import {
   Play,
   RefreshCw,
   Sparkles,
+  Trophy,
   WandSparkles,
 } from "lucide-react";
 import { createTask, getTask, readWorkflowWorkspaceFile, runTask } from "../lib/api";
 
 type StageId =
+  | "market-ranking"
   | "reference-distillation"
   | "adopt-reference"
   | "build"
@@ -41,6 +43,7 @@ type Stage = {
 
 const CORE_PREFIX = "xs2-novel-flywheel-";
 const stages: Stage[] = [
+  { id: "market-ranking", workflowId: `${CORE_PREFIX}market-ranking`, title: "知乎榜单", eyebrow: "市场观察", description: "抓取知乎盐选公开榜单，保存作品、排名、题材和热度快照。", group: "learn", accent: "from-amber-500/30 to-yellow-500/10" },
   { id: "reference-distillation", workflowId: `${CORE_PREFIX}reference-distillation`, title: "参考资料蒸馏", eyebrow: "资料学习", description: "从参考文本提炼可迁移的叙事机制，保留证据与边界。", group: "learn", accent: "from-violet-500/30 to-fuchsia-500/10" },
   { id: "adopt-reference", workflowId: `${CORE_PREFIX}adopt-reference`, title: "采用写法", eyebrow: "资料学习", description: "从候选机制中选择本次创作真正要使用的写法。", group: "learn", accent: "from-fuchsia-500/30 to-rose-500/10" },
   { id: "build", workflowId: `${CORE_PREFIX}build`, title: "世界观构建", eyebrow: "创作前置", description: "建立世界运行规则、时空、社会、历史与存在基础。", group: "plan", accent: "from-sky-500/30 to-cyan-500/10" },
@@ -55,6 +58,7 @@ const stages: Stage[] = [
 const defaultValues: Record<string, string> = {
   reference_path: "references/source.txt",
   window_size: "4200",
+  top_n: "100",
   selection_path: "learning/selection.json",
   premise: "",
   genre: "都市情感",
@@ -74,6 +78,7 @@ const defaultValues: Record<string, string> = {
 const labels: Record<string, string> = {
   reference_path: "参考资料路径",
   window_size: "窗口长度",
+  top_n: "抓取作品数",
   selection_path: "选择文件路径",
   premise: "题材创意",
   genre: "题材类型",
@@ -91,6 +96,7 @@ const labels: Record<string, string> = {
 };
 
 function stageIcon(stage: Stage) {
+  if (stage.id === "market-ranking") return <Trophy className="h-4 w-4" />;
   if (stage.group === "learn") return <FlaskConical className="h-4 w-4" />;
   if (stage.group === "plan") return <Sparkles className="h-4 w-4" />;
   return <WandSparkles className="h-4 w-4" />;
@@ -102,13 +108,15 @@ function statusLabel(status: string) {
 
 export default function NovelWorkbenchPage() {
   const [workspace, setWorkspace] = useState("C:\\xs2\\DeterminFlow\\data\\workspaces\\xs2-novel-workbench");
-  const [activeStageId, setActiveStageId] = useState<StageId>("reference-distillation");
+  const [activeStageId, setActiveStageId] = useState<StageId>("market-ranking");
   const [values, setValues] = useState<Record<string, string>>(defaultValues);
   const [task, setTask] = useState<any>(null);
   const [taskError, setTaskError] = useState("");
   const [launching, setLaunching] = useState(false);
   const [candidates, setCandidates] = useState<any[]>([]);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [rankingSnapshot, setRankingSnapshot] = useState<any>(null);
+  const [loadingRankings, setLoadingRankings] = useState(false);
   const activeStage = stages.find((stage) => stage.id === activeStageId) || stages[0];
 
   const refreshTask = useCallback(async () => {
@@ -141,12 +149,30 @@ export default function NovelWorkbenchPage() {
     }
   }, [task?.task_id, task?.workflow_id]);
 
+  const loadRankings = useCallback(async () => {
+    if (!task?.workflow_id || !task?.task_id) return;
+    setLoadingRankings(true);
+    try {
+      const result = await readWorkflowWorkspaceFile(task.workflow_id, task.task_id, "market/zhihu-ranking.json");
+      setRankingSnapshot(JSON.parse(result.content));
+    } catch {
+      setRankingSnapshot(null);
+    } finally {
+      setLoadingRankings(false);
+    }
+  }, [task?.task_id, task?.workflow_id]);
+
   useEffect(() => {
     if (task?.status === "completed" && activeStageId === "reference-distillation") void loadCandidates();
   }, [activeStageId, loadCandidates, task?.status]);
 
+  useEffect(() => {
+    if (task?.status === "completed" && activeStageId === "market-ranking") void loadRankings();
+  }, [activeStageId, loadRankings, task?.status]);
+
   const visibleFields = useMemo(() => {
     const fieldMap: Record<StageId, string[]> = {
+      "market-ranking": ["top_n"],
       "reference-distillation": ["reference_path", "window_size"],
       "adopt-reference": ["selection_path"],
       build: ["premise", "genre", "language"],
@@ -221,6 +247,7 @@ export default function NovelWorkbenchPage() {
               ))}
             </div>
 
+            {activeStageId === "market-ranking" && rankingSnapshot && <section className="rounded-2xl border border-amber-400/20 bg-amber-400/5 p-5"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-300">Market snapshot</p><h3 className="mt-1 text-lg font-semibold text-foreground">知乎盐选榜单 · {rankingSnapshot.work_count} 部作品</h3><p className="mt-1 text-xs text-muted-foreground">抓取时间 {new Date(rankingSnapshot.captured_at).toLocaleString()}</p></div><button type="button" onClick={loadRankings} disabled={loadingRankings} className="rounded-lg border border-border p-2 text-muted-foreground hover:text-foreground" title="刷新榜单"><RefreshCw className={`h-4 w-4 ${loadingRankings ? "animate-spin" : ""}`} /></button></div><div className="mt-4 grid gap-3 md:grid-cols-2">{(rankingSnapshot.works || []).slice(0, 10).map((work: any) => <article key={`${work.ranking_name}-${work.rank}-${work.platform_work_id}`} className="rounded-xl border border-border bg-card/70 p-4"><div className="flex items-start gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-400/15 text-xs font-bold text-amber-200">{work.rank}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h4 className="truncate text-sm font-semibold text-foreground">{work.title}</h4><span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[10px] text-secondary-foreground">{work.ranking_name}</span></div><p className="mt-1 text-xs text-muted-foreground">{work.category} · {work.likes ? `${Number(work.likes).toLocaleString()} 赞` : "热度未提供"}</p><p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{work.summary || "暂无简介"}</p></div></div></article>)}</div><p className="mt-3 text-xs text-muted-foreground">{rankingSnapshot.boundary}</p></section>}
             {activeStageId === "reference-distillation" && candidates.length > 0 && <section className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-5"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">Learning output</p><h3 className="mt-1 text-lg font-semibold text-foreground">已提炼的写法 · {candidates.length} 条</h3></div><button type="button" onClick={loadCandidates} className="rounded-lg border border-border p-2 text-muted-foreground hover:text-foreground" title="刷新候选"><RefreshCw className="h-4 w-4" /></button></div><div className="mt-4 grid gap-3 md:grid-cols-2">{candidates.slice(0, 6).map((candidate) => <article key={candidate.candidate_id} className="rounded-xl border border-border bg-card/70 p-4"><h4 className="text-sm font-semibold text-foreground">{candidate.mechanism}</h4><p className="mt-2 text-xs leading-5 text-muted-foreground">{candidate.transfer_guidance}</p><div className="mt-3 flex flex-wrap gap-1.5">{(candidate.scopes || []).map((scope: string) => <span key={scope} className="rounded-full bg-secondary px-2 py-0.5 text-[10px] text-secondary-foreground">{scope}</span>)}</div></article>)}</div><p className="mt-3 text-xs text-muted-foreground">候选已生成，下一步在工作区的 `learning/selection.html` 中选择后运行“采用写法”。</p></section>}
           </section>
 
