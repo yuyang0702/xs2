@@ -1,231 +1,196 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, BookOpenText, Check, ChevronRight, CircleAlert, FileText, Loader2, Play, RefreshCw } from "lucide-react";
-import { createTask, getTask, getWorkflow, listWorkflows, readWorkflowWorkspaceFile, runTask } from "../lib/api";
-import type { WorkflowVariable } from "../types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity, ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, CircleAlert, Clock3,
+  FileText, FolderOpen, Gauge, Headphones, ListChecks, Loader2, MessageCircle,
+  Play, RefreshCw, Settings2, Sparkles, WandSparkles,
+} from "lucide-react";
+import {
+  createTask, getTask, getWorkflow, listWorkspaceFiles, listWorkflows,
+  readWorkflowWorkspaceFile, readWorkspaceFile, runTask,
+} from "../lib/api";
+import type { WorkflowDefinition, WorkflowVariable } from "../types";
 
 const PREFIX = "xs2-novel-flywheel-";
-const steps = [
-  { id: "reference-distillation", title: "蒸馏参考资料", group: "资料学习", description: "提炼参考资料中的写法，保留来源依据。", fields: ["reference_path", "window_size"], artifact: "learning/candidates.json" },
-  { id: "adopt-reference", title: "选择要采用的写法", group: "资料学习", description: "勾选适合这本书的写法。也可以不选，保持原创设定。", fields: [], artifact: "learning/active_context.md" },
-  { id: "build", title: "建立世界观", group: "创作规划", description: "填写故事创意，建立世界运行规则。后续步骤会沿用这些设置。", fields: ["premise", "genre", "language"], artifact: "meta/world_foundation.md" },
-  { id: "character", title: "创建角色", group: "创作规划", description: "根据故事创意和世界观创建角色档案与声音。", fields: [], artifact: "meta/character_profiles.md" },
-  { id: "story-plan", title: "规划故事", group: "创作规划", description: "把世界和角色汇总为故事规划与风格档案。", fields: [], artifact: "meta/story_plan.md" },
-  { id: "outline", title: "生成卷纲与近纲", group: "创作规划", description: "设置作品规模，把故事拆成卷和近期章节。", fields: ["volume_number", "estimated_length", "words_per_chapter"], artifact: "outline/near_term_outline.md" },
-  { id: "mvp", title: "生成章节正文", group: "正文生产", description: "写下这一章的重点，系统沿用设定、已选写法和叙事视角。", fields: ["human_intent", "world_intent", "target_word_count", "writer_type"], artifact: "story/{chapter}/chapter.md" },
-  { id: "polish", title: "润色本章", group: "正文生产", description: "改善语言与阅读节奏，保持既定视角。", fields: [], artifact: "story/{chapter}/chapter.md" },
-  { id: "post-hoc", title: "质量审核与后验", group: "质量审核", description: "核查章节事实和连续性，将变化回写到作品档案。", fields: [], artifact: "story/{chapter}/diff_story_confirmed.md" },
-  { id: "export", title: "导出成品", group: "导出成品", description: "按章节顺序合并正文，保存成品和导出清单。", fields: [], artifact: "export/manuscript.md" },
-];
-const defaults: Record<string, string> = {
-  reference_path: "references/source.txt", window_size: "4200", premise: "", genre: "都市情感", language: "中文",
-  volume_number: "1", estimated_length: "中", words_per_chapter: "2000-2500", latest_chapter: "0000",
-  chapter_number: "0001", prev_chapter: "0000", human_intent: "", world_intent: "", target_word_count: "3000-4000",
-  writer_type: "single", narrative_pov: "third_person", output_path: "export/manuscript.md", manifest_path: "export/manifest.json",
+const DEFAULT_WORKSPACE = "C:\\xs2\\DeterminFlow\\data\\workspaces\\xs2-novel-workbench";
+
+type StageMeta = {
+  id: string; title: string; group: string; description: string; artifact: string;
+  preferredFields?: string[]; optional?: boolean;
 };
-const labels: Record<string, string> = { reference_path: "参考资料路径", window_size: "每个分析窗口的长度", premise: "故事创意", genre: "题材类型", language: "输出语言", volume_number: "目标卷号", estimated_length: "预计篇幅", words_per_chapter: "每章字数", human_intent: "本章想写什么", world_intent: "世界发生的变化（可选）", target_word_count: "目标字数", writer_type: "写手模式" };
+
+const STAGES: StageMeta[] = [
+  { id: "reference-distillation", title: "资料蒸馏", group: "方向准备", description: "从参考资料中提炼可迁移的抽象写法、看点和证据。", artifact: "learning/candidates.json", preferredFields: ["reference_path", "window_size"] },
+  { id: "novel-advisor", title: "小说顾问", group: "方向准备", description: "根据资料和创意，判断题材定位、写法、钩子与读者承诺。", artifact: "learning/advisor_report.json", preferredFields: ["premise", "genre", "narrative_pov", "language"], optional: true },
+  { id: "adopt-reference", title: "写法确认", group: "方向准备", description: "确认哪些机制进入本书，未选择的内容不会带入创作。", artifact: "learning/active_context.md", optional: true },
+  { id: "build", title: "建立世界观", group: "创作规划", description: "根据已确认的方向建立世界运行规则。", artifact: "meta/world_foundation.md", preferredFields: ["premise", "genre", "language", "narrative_pov"] },
+  { id: "character", title: "创建角色", group: "创作规划", description: "生成角色档案、关系和声音锚点。", artifact: "meta/character_profiles.md", preferredFields: ["narrative_pov", "language"] },
+  { id: "story-plan", title: "规划故事", group: "创作规划", description: "把世界、角色、看点和写法汇总为故事引擎。", artifact: "meta/story_plan.md", preferredFields: ["narrative_pov", "language"] },
+  { id: "outline", title: "生成卷纲", group: "创作规划", description: "按短篇或长篇模式规划篇幅、分卷和近期章节。", artifact: "outline/near_term_outline.md", preferredFields: ["volume_number", "estimated_length", "words_per_chapter", "latest_chapter", "narrative_pov"] },
+  { id: "mvp", title: "生成正文", group: "正文生产", description: "按当前章意图、字数和作品设定生成正文。", artifact: "story/{chapter}/chapter.md", preferredFields: ["human_intent", "world_intent", "target_word_count", "writer_type", "chapter_number", "narrative_pov", "language"] },
+  { id: "polish", title: "润色本章", group: "正文生产", description: "改善语言、节奏和阅读体验，不改变已确认事实。", artifact: "story/{chapter}/chapter.md", preferredFields: ["narrative_pov", "language"] },
+  { id: "reader-sim", title: "模拟读者", group: "质量检查", description: "从读者视角判断看点、钩子、节奏和继续阅读意愿。", artifact: "quality/reader_report.json", preferredFields: ["chapter_number", "narrative_pov", "language"], optional: true },
+  { id: "post-hoc", title: "质量审核", group: "质量检查", description: "确认章节事实并回写世界、角色、伏笔和叙事债务。", artifact: "story/{chapter}/diff_story_confirmed.md", preferredFields: ["chapter_number", "narrative_pov", "language"] },
+  { id: "export", title: "导出成品", group: "交付", description: "合并已完成章节，生成成品和导出清单。", artifact: "export/manuscript.md", preferredFields: ["output_path", "manifest_path"] },
+];
+
+const FALLBACK_DEFAULTS: Record<string, string> = {
+  reference_path: "references/source.txt", window_size: "4200", premise: "", genre: "都市情感", language: "中文",
+  narrative_pov: "third_person", volume_number: "1", estimated_length: "中", words_per_chapter: "2000-2500",
+  latest_chapter: "0000", chapter_number: "0001", prev_chapter: "0000", human_intent: "", world_intent: "",
+  target_word_count: "3000-4000", writer_type: "single", output_path: "export/manuscript.md", manifest_path: "export/manifest.json",
+};
+
+const LABELS: Record<string, string> = {
+  reference_path: "参考资料路径", window_size: "分析窗口长度", premise: "故事创意", genre: "题材类型", language: "输出语言",
+  narrative_pov: "叙事视角", volume_number: "目标卷号", estimated_length: "预计篇幅", words_per_chapter: "每章字数",
+  latest_chapter: "最新章节号", chapter_number: "章节号", prev_chapter: "上一章节号", human_intent: "本章想写什么",
+  world_intent: "世界发生的变化", target_word_count: "目标字数", writer_type: "写手模式", output_path: "成品路径", manifest_path: "导出清单路径",
+};
+
 type TaskRef = { workflow_id: string; task_id: string };
-type Project = { index: number; values: Record<string, string>; refs: Record<string, TaskRef>; completed: string[]; selected: string[]; autoNext: boolean };
-type Candidate = { candidate_id: string; mechanism: string; transfer_guidance: string; constraints: string[]; evidence?: Array<{ excerpt: string }> };
-type Extension = { workflow_id: string; name: string; node_count: number };
+type View = "home" | "flow" | "chapters" | "review";
+type Mode = "short" | "serial";
+type AutoScope = "manual" | "short_full" | "serial_batch";
+type Project = {
+  title: string; mode: Mode; index: number; values: Record<string, string>; refs: Record<string, TaskRef>;
+  completed: string[]; selected: string[]; autoNext: boolean; autoScope: AutoScope; autoChapterLimit: number;
+  autoChapterStarted: number | null; directionConfirmed: boolean; distillationSkipped: boolean;
+  advisorAccepted: boolean; assistantPlan: string;
+};
+type CatalogItem = { workflow_id: string; name: string; node_count: number; version: number; status?: string; definition?: WorkflowDefinition };
+type WorkspaceFile = { path: string; size_bytes: number; modified_at: number };
+
+const storageKey = (workspace: string) => `xs2-novel-control-v2:${workspace.toLowerCase()}`;
+const workflowId = (stageId: string) => PREFIX + stageId;
 const terminal = ["completed", "failed", "stopped", "cancelled"];
-const storageKey = (workspace: string) => `xs2-novel-wizard-v1:${workspace.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase()}`;
+const cardClass = "rounded-2xl border border-border bg-card";
+const inputClass = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-60";
+
 function restore(workspace: string): Project {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey(workspace)) || "null");
-    if (saved && Number.isInteger(saved.index) && saved.index >= 0 && saved.index < steps.length) {
-      return { index: saved.index, values: { ...defaults, ...saved.values }, refs: saved.refs || {}, completed: saved.completed || [], selected: saved.selected || [], autoNext: saved.autoNext === true };
-    }
-  } catch { /* Invalid browser draft starts at the first step. */ }
-  return { index: 0, values: { ...defaults }, refs: {}, completed: [], selected: [], autoNext: false };
+    if (saved) return {
+      title: saved.title || "未命名作品", mode: saved.mode === "serial" ? "serial" : "short", index: Number.isInteger(saved.index) ? saved.index : 0,
+      values: { ...FALLBACK_DEFAULTS, ...(saved.values || {}) }, refs: saved.refs || {}, completed: saved.completed || [], selected: saved.selected || [],
+      autoNext: saved.autoNext === true, autoScope: saved.autoScope || "manual", autoChapterLimit: Number(saved.autoChapterLimit) || 1,
+      autoChapterStarted: typeof saved.autoChapterStarted === "number" ? saved.autoChapterStarted : null, directionConfirmed: saved.directionConfirmed === true,
+      distillationSkipped: saved.distillationSkipped === true, advisorAccepted: saved.advisorAccepted === true, assistantPlan: saved.assistantPlan || "",
+    };
+  } catch { /* invalid local draft */ }
+  return {
+    title: "未命名作品", mode: "short", index: 0, values: { ...FALLBACK_DEFAULTS }, refs: {}, completed: [], selected: [],
+    autoNext: false, autoScope: "manual", autoChapterLimit: 1, autoChapterStarted: null, directionConfirmed: false,
+    distillationSkipped: false, advisorAccepted: false, assistantPlan: "",
+  };
 }
+
 function statusLabel(status: string) {
   return ({ pending: "等待启动", running: "运行中", pre_running: "准备中", completed: "已完成", failed: "执行失败", stopped: "已停止", cancelled: "已取消" } as Record<string, string>)[status] || status;
 }
-const fieldClass = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-60";
 
 export default function NovelWorkbenchPage() {
-  const [workspace, setWorkspace] = useState(() => localStorage.getItem("xs2-novel-workspace") || "C:\\xs2\\DeterminFlow\\data\\workspaces\\xs2-novel-workbench");
-  return <NovelWizard key={storageKey(workspace)} workspace={workspace} onWorkspaceChange={(next) => { localStorage.setItem("xs2-novel-workspace", next); setWorkspace(next); }} />;
-}
-
-function NovelWizard({ workspace, onWorkspaceChange }: { workspace: string; onWorkspaceChange: (next: string) => void }) {
-  const [project, setProject] = useState(() => restore(workspace));
+  const [workspace, setWorkspace] = useState(() => localStorage.getItem("xs2-novel-workspace") || DEFAULT_WORKSPACE);
+  const [view, setView] = useState<View>(() => new URLSearchParams(window.location.search).get("view") === "flow" ? "flow" : "home");
+  const [project, setProject] = useState<Project>(() => restore(workspace));
   const [workspaceDraft, setWorkspaceDraft] = useState(workspace);
-  const [extensions, setExtensions] = useState<Extension[]>([]);
-  const [extensionId, setExtensionId] = useState("");
-  const [extensionFields, setExtensionFields] = useState<WorkflowVariable[]>([]);
-  const [extensionValues, setExtensionValues] = useState<Record<string, string>>({});
-  const [extensionRef, setExtensionRef] = useState<TaskRef | null>(null);
-  const [task, setTask] = useState<any>(null);
-  const [verified, setVerified] = useState(false);
-  const [launching, setLaunching] = useState(false);
-  const [error, setError] = useState("");
-  const [candidateSet, setCandidateSet] = useState<{ candidates: Candidate[]; candidates_sha256: string } | null>(null);
-  const [loadingCandidates, setLoadingCandidates] = useState(false);
-  const [preview, setPreview] = useState("");
-  const requestEpoch = useRef(0);
-  const launchGuard = useRef(false);
-  const autoAdvancedKey = useRef("");
-  const autoStartedKey = useRef("");
-  const autoStartIndex = useRef<number | null>(null);
-  const step = steps[project.index];
-  const workflowId = extensionId || PREFIX + step.id;
-  const ref = extensionId ? extensionRef : project.refs[step.id];
-  const title = extensions.find((item) => item.workflow_id === extensionId)?.name || step.title;
-  const busy = launching || (!!task && !terminal.includes(task.status));
-  const done = verified && task?.status === "completed" && task.workflow_id === workflowId && task.task_id === ref?.task_id;
-  const artifact = step.artifact.replace("{chapter}", project.values.chapter_number);
-  const setValue = (key: string, value: string) => setProject((current) => ({ ...current, values: { ...current.values, [key]: value } }));
-
-  useEffect(() => { localStorage.setItem(storageKey(workspace), JSON.stringify(project)); }, [workspace, project]);
-  useEffect(() => {
-    let active = true;
-    const discover = () => void listWorkflows().then((items) => { if (active) setExtensions(items.filter((item) => !steps.some((step) => PREFIX + step.id === item.workflow_id) && item.workflow_id !== PREFIX + "market-ranking")); }).catch(() => {});
-    discover();
-    const timer = window.setInterval(discover, 30000);
-    return () => { active = false; window.clearInterval(timer); };
+  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
+  const [files, setFiles] = useState<WorkspaceFile[]>([]);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const refreshCatalog = useCallback(async () => {
+    try {
+      const items = await listWorkflows();
+      const relevant = items.filter((item) => item.workflow_id.startsWith(PREFIX));
+      const enriched = await Promise.all(relevant.map(async (item) => {
+        try { return { ...item, definition: (await getWorkflow(item.workflow_id)).definition }; } catch { return item; }
+      }));
+      setCatalog(enriched); setCatalogError("");
+    } catch (failure) { setCatalogError(failure instanceof Error ? failure.message : "无法读取工作流目录"); }
   }, []);
-  useEffect(() => {
-    let active = true;
-    setExtensionFields([]);
-    if (extensionId) void getWorkflow(extensionId).then(({ definition }) => {
-      if (!active) return;
-      const fields = (definition.variables || []).filter((field) => !field.hidden && field.source_type !== "output");
-      setExtensionFields(fields);
-      setExtensionValues(Object.fromEntries(fields.map((field) => [field.key, field.default || ""])));
-    }).catch((failure) => { if (active) setError(String(failure)); });
-    return () => { active = false; };
-  }, [extensionId]);
-
-  const refreshTask = useCallback(async () => {
-    if (!ref) return;
-    const epoch = requestEpoch.current;
-    try {
-      const result = await getTask(ref.workflow_id, ref.task_id);
-      if (epoch !== requestEpoch.current) return;
-      setTask(result.task);
-      setVerified(false);
-      if (result.task.status === "completed") {
-        if (!extensionId) {
-          const output = await readWorkflowWorkspaceFile(ref.workflow_id, ref.task_id, artifact);
-          if (epoch !== requestEpoch.current) return;
-          if (!output.content.trim()) throw new Error("任务已结束，但预期产物为空，请检查任务结果后重试。");
-          setPreview(output.content);
-        }
-        if (epoch === requestEpoch.current) { setVerified(true); setError(""); }
-      }
-    } catch (failure) { if (epoch === requestEpoch.current) setError(failure instanceof Error ? failure.message : "读取任务失败"); }
-  }, [ref?.workflow_id, ref?.task_id, artifact, extensionId]);
-  useEffect(() => {
-    requestEpoch.current += 1;
-    setTask(null); setVerified(false); setError(""); setPreview("");
-    if (!ref) return;
-    void refreshTask();
-    const timer = window.setInterval(refreshTask, 3000);
-    return () => { requestEpoch.current += 1; window.clearInterval(timer); };
-  }, [refreshTask]);
-
-  useEffect(() => {
-    let active = true;
-    const source = project.refs["reference-distillation"];
-    if (extensionId || !source || !["reference-distillation", "adopt-reference"].includes(step.id)) return;
-    setLoadingCandidates(true);
-    void readWorkflowWorkspaceFile(source.workflow_id, source.task_id, "learning/candidates.json").then((output) => {
-      if (active) setCandidateSet(JSON.parse(output.content));
-    }).catch(() => { if (active) setCandidateSet(null); }).finally(() => { if (active) setLoadingCandidates(false); });
-    return () => { active = false; };
-  }, [project.refs["reference-distillation"]?.task_id, step.id, extensionId, done]);
-
-  const launch = async () => {
-    if (launchGuard.current || busy || done) return;
-    launchGuard.current = true; setLaunching(true); setError("");
-    try {
-      if (!workspace.trim()) throw new Error("请先填写作品工作区。");
-      const parameters: Record<string, string> = extensionId ? { ...extensionValues } : { ...project.values };
-      if (!extensionId && step.id === "adopt-reference") {
-        if (!candidateSet) throw new Error("尚未读取到蒸馏结果，请刷新结果后再采用写法。");
-        parameters.selection_json = JSON.stringify({ candidates_sha256: candidateSet.candidates_sha256, selected_candidate_ids: project.selected });
-      }
-      const { definition } = await getWorkflow(workflowId);
-      const inputs = Object.fromEntries((definition.variables || []).filter((field) => field.source_type !== "output" && field.type !== "file" && parameters[field.key] !== undefined).map((field) => [field.key, parameters[field.key]]));
-      const missing = (definition.variables || []).find((field) => field.required && !field.hidden && field.type !== "file" && !(inputs[field.key] ?? field.default)?.trim());
-      if (missing) throw new Error(`请填写${missing.name || missing.key}。`);
-      const created = await createTask(workflowId, inputs, undefined, undefined, workspace);
-      const nextRef = { workflow_id: workflowId, task_id: created.task_id };
-      if (extensionId) setExtensionRef(nextRef);
-      else setProject((current) => ({ ...current, refs: { ...current.refs, [step.id]: nextRef } }));
-      await runTask(workflowId, created.task_id);
-      setTask({ ...nextRef, status: "running", name: title });
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "启动失败"); }
-    finally { launchGuard.current = false; setLaunching(false); }
-  };
-  useEffect(() => {
-    if (extensionId || !project.autoNext || !done || project.index >= steps.length - 1) return;
-    const key = `${step.id}:${ref?.task_id || ""}`;
-    if (autoAdvancedKey.current === key) return;
-    autoAdvancedKey.current = key;
-    autoStartIndex.current = project.index + 1;
-    setProject((current) => ({ ...current, index: current.index + 1, completed: [...new Set([...current.completed, step.id])] }));
-  }, [done, extensionId, project.autoNext, project.index, ref?.task_id, step.id]);
-  useEffect(() => {
-    if (extensionId || !project.autoNext || autoStartIndex.current !== project.index || project.refs[step.id] || launching || task || (step.id === "adopt-reference" && !candidateSet)) return;
-    const key = `${step.id}:${project.index}`;
-    if (autoStartedKey.current === key) return;
-    autoStartedKey.current = key;
-    autoStartIndex.current = null;
-    void launch();
-  }, [candidateSet, extensionId, launching, project.autoNext, project.index, project.refs, step.id, task]);
-  const next = () => {
-    if (!done || extensionId || project.index >= steps.length - 1) return;
-    setProject((current) => ({ ...current, index: current.index + 1, completed: [...new Set([...current.completed, step.id])] }));
-  };
-  const nextChapter = () => {
-    if (!done || extensionId || !["post-hoc", "export"].includes(step.id)) return;
-    setProject((current) => ({ ...current, index: 6, completed: current.completed.filter((id) => !["mvp", "polish", "post-hoc", "export"].includes(id)),
-      refs: Object.fromEntries(Object.entries(current.refs).filter(([id]) => !["mvp", "polish", "post-hoc", "export"].includes(id))),
-      values: { ...current.values, latest_chapter: current.values.chapter_number, prev_chapter: current.values.chapter_number, chapter_number: String(Number(current.values.chapter_number) + 1).padStart(4, "0"), human_intent: "", world_intent: "" },
-    }));
-  };
-  const renderField = (key: string, field?: WorkflowVariable) => {
-    const value = extensionId ? extensionValues[key] || "" : project.values[key] || "";
-    const update = (next: string) => extensionId ? setExtensionValues((current) => ({ ...current, [key]: next })) : setValue(key, next);
-    const options = field?.options?.length ? field.options : key === "writer_type" ? [{ name: "单写手", value: "single" }, { name: "多写手", value: "muti" }] : [];
-    return <label key={key} className="block"><span className="mb-2 block text-sm font-medium">{field?.name || labels[key] || key}</span>
-      {options.length ? <select disabled={busy || done} value={value} onChange={(event) => update(event.target.value)} className={fieldClass}>{options.map((item) => <option key={item.value} value={item.value}>{item.name}</option>)}</select>
-        : field?.type === "textarea" || key.includes("intent") || key === "premise" ? <textarea disabled={busy || done} value={value} onChange={(event) => update(event.target.value)} rows={4} className={fieldClass} />
-        : <input disabled={busy || done} value={value} onChange={(event) => update(event.target.value)} className={fieldClass} />}
-      {field?.description && <span className="mt-1 block text-xs text-muted-foreground">{field.description}</span>}
-    </label>;
-  };
-
-  return <div className="h-full overflow-y-auto bg-background px-5 py-6 lg:px-8"><div className="mx-auto max-w-[1400px] space-y-6">
-    <section className="rounded-3xl border border-indigo-300/20 bg-gradient-to-br from-[#18285d] to-[#29133b] p-7 text-white">
-      <p className="flex items-center gap-2 text-xs tracking-widest text-indigo-200"><BookOpenText className="h-4 w-4" /> XS2 小说创作</p>
-      <h2 className="mt-3 text-3xl font-semibold">一步一步，写完你的故事</h2>
-      <p className="mt-3 text-sm text-indigo-100/75">从参考资料开始，完成当前步骤后点击下一步。创意、写法和视角会沿用到后续创作。</p>
-      <label className="mt-5 flex items-start gap-2 rounded-xl border border-white/15 bg-black/10 p-3 text-xs text-indigo-100"><input id="novel-auto-next" type="checkbox" checked={project.autoNext} disabled={busy} onChange={(event) => setProject((current) => ({ ...current, autoNext: event.target.checked }))} className="mt-0.5" /><span><span className="font-medium">完成后自动执行下一步</span><span className="mt-1 block text-indigo-200">产物验证通过后自动进入并启动下一步；需要创意或章节输入时会停下来等你填写。</span></span></label>
-      <details className="mt-3"><summary className="cursor-pointer text-xs text-indigo-200">作品工作区 · {workspace}</summary><div className="mt-3 flex gap-2"><input aria-label="作品工作区" disabled={busy} value={workspaceDraft} onChange={(event) => setWorkspaceDraft(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-white/20 bg-black/20 p-2 text-xs" /><button disabled={busy || !workspaceDraft.trim()} onClick={() => onWorkspaceChange(workspaceDraft.trim())} className="rounded-lg bg-white/10 px-3 text-xs">切换作品</button></div><p className="mt-2 text-xs text-indigo-200">每个作品目录分别保存进度。新作品从第一步开始。</p></details>
-    </section>
-    <div className="grid gap-6 lg:grid-cols-[250px_minmax(0,1fr)]">
-      <aside className="space-y-4"><h3 className="text-sm font-semibold">创作进度</h3><ol className="space-y-2">{steps.map((item, index) => <li key={item.id} aria-current={!extensionId && project.index === index ? "step" : undefined} className={`flex gap-3 rounded-xl border p-3 ${project.index === index && !extensionId ? "border-primary/50 bg-primary/10" : "border-border bg-card/60"}`}><span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs ${project.completed.includes(item.id) || (index === project.index && done && !extensionId) ? "bg-emerald-400/15 text-emerald-300" : "bg-secondary text-muted-foreground"}`}>{project.completed.includes(item.id) ? <Check className="h-3 w-3" /> : index + 1}</span><div><p className="text-sm">{item.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{item.group}{project.index === index ? " · 当前步骤" : ""}</p></div></li>)}</ol>
-        {extensions.length > 0 && <details><summary className="cursor-pointer text-sm text-muted-foreground">可选插件 · {extensions.length}</summary><div className="mt-2 space-y-2">{extensions.map((item) => <button key={item.workflow_id} disabled={busy} onClick={() => { setExtensionId(item.workflow_id); setExtensionRef(null); }} className="w-full rounded-lg border border-border p-3 text-left text-xs">{item.name}</button>)}</div></details>}
-      </aside>
-      <main className="space-y-5">
-        <section className="rounded-2xl border border-border bg-card p-6">
-          {extensionId && <button disabled={busy} onClick={() => setExtensionId("")} className="mb-4 text-sm text-primary">返回创作流程</button>}
-          <p className="text-xs text-primary">{extensionId ? "可选插件" : `第 ${project.index + 1} 步 / 共 ${steps.length} 步${project.index >= 6 && project.index < 9 ? ` · 第 ${project.values.chapter_number} 章` : ""}`}</p>
-          <h3 className="mt-2 text-2xl font-semibold">{title}</h3><p className="mt-3 text-sm leading-6 text-muted-foreground">{extensionId ? "独立运行这个插件，完成后可以返回当前创作步骤。" : step.description}</p>
-          {!extensionId && <div className="mt-5 rounded-xl bg-secondary/50 p-4"><label className="block text-sm font-medium">这本书的叙事视角<select aria-label="叙事视角" disabled={busy || !!project.refs.build} value={project.values.narrative_pov} onChange={(event) => setValue("narrative_pov", event.target.value)} className={`${fieldClass} mt-2`}><option value="first_person">第一人称（我）</option><option value="third_person">第三人称（他 / 她）</option></select></label><p className="mt-2 text-xs leading-5 text-muted-foreground">{project.values.narrative_pov === "first_person" ? "以“我”的经历和认知讲述，只呈现叙述者能感知或推断的内容。" : "以“他 / 她”叙述，保持场景焦点清晰。"} 开始世界观规划后锁定本书视角。</p></div>}
-          <div className="mt-5 space-y-4">{extensionId ? extensionFields.map((field) => renderField(field.key, field)) : step.fields.map((key) => renderField(key))}</div>
-          {!extensionId && step.id === "adopt-reference" && <div className="mt-5 space-y-3">{loadingCandidates ? <p className="text-sm text-muted-foreground">正在读取写法…</p> : candidateSet ? <>{candidateSet.candidates.length === 0 && <p className="text-sm text-muted-foreground">没有提炼出适合迁移的写法，可以按原创设定继续。</p>}{candidateSet.candidates.map((candidate) => <label key={candidate.candidate_id} className="block rounded-xl border border-border p-4"><div className="flex items-start gap-3"><input type="checkbox" disabled={busy || done} checked={project.selected.includes(candidate.candidate_id)} onChange={(event) => setProject((current) => ({ ...current, selected: event.target.checked ? [...current.selected, candidate.candidate_id] : current.selected.filter((id) => id !== candidate.candidate_id) }))} /><div><span className="text-sm font-semibold">{candidate.mechanism}</span><p className="mt-2 text-xs leading-5 text-muted-foreground">{candidate.transfer_guidance}</p><p className="mt-2 text-xs text-muted-foreground">使用边界：{candidate.constraints.join("；")}</p>{candidate.evidence?.length ? <details className="mt-2 text-xs"><summary className="cursor-pointer text-primary">查看原文依据</summary>{candidate.evidence.map((proof, index) => <p key={index} className="mt-2 text-muted-foreground">{proof.excerpt}</p>)}</details> : null}</div></div></label>)}<p className="text-xs text-muted-foreground">已选 {project.selected.length} 条。未勾选的写法不会带入创作。</p></> : <p className="text-sm text-destructive">无法读取候选写法，请检查蒸馏结果。</p>}</div>}
-          {error && <p role="alert" className="mt-4 flex gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><CircleAlert className="h-4 w-4 shrink-0" />{error}</p>}
-          <div className="mt-6 flex flex-wrap gap-3">{!done && <button disabled={busy || (!extensionId && step.id === "adopt-reference" && !candidateSet)} onClick={launch} className="flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{busy ? "正在执行，请稍候" : task?.status === "failed" ? "重新执行当前步骤" : step.id === "adopt-reference" && !extensionId ? "确认选中写法" : "开始当前步骤"}</button>}
-            {done && !extensionId && project.index < steps.length - 1 && <button onClick={next} className="flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground">{step.id === "post-hoc" ? "导出成品" : "下一步"}<ChevronRight className="h-4 w-4" /></button>}
-            {done && !extensionId && ["post-hoc", "export"].includes(step.id) && <button onClick={nextChapter} className="rounded-xl border border-primary/40 px-6 py-3 text-sm font-semibold text-primary">继续写下一章</button>}
-          </div>
-        </section>
-        {ref && <section className="rounded-2xl border border-border bg-card p-5"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" /><h3 className="text-sm font-semibold">当前执行</h3><span className="ml-auto text-xs text-muted-foreground">{task ? statusLabel(task.status) : "正在恢复任务状态"}</span></div><p className="mt-3 font-mono text-xs text-muted-foreground">{ref.task_id}</p>{task?.status === "failed" && <p className="mt-3 text-sm text-destructive">{(Object.values(task.node_states || {}) as any[]).find((node) => node.status === "failed")?.error || "流程失败，请查看工作流中的节点详情。"}</p>}{done && <p className="mt-3 flex items-center gap-2 text-sm text-emerald-400"><Check className="h-4 w-4" />{extensionId ? "插件执行完成" : "当前步骤完成，产物已保存"}</p>}<button onClick={refreshTask} className="mt-3 flex items-center gap-2 text-xs text-primary"><RefreshCw className="h-3 w-3" />刷新结果</button>{preview && <details className="mt-4"><summary className="flex cursor-pointer items-center gap-2 text-sm"><FileText className="h-4 w-4" />查看产物 · {artifact}</summary><pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-xl bg-secondary/40 p-4 text-xs leading-6">{preview}</pre></details>}</section>}
-      </main>
-    </div>
-  </div></div>;
+  const refreshFiles = useCallback(async () => {
+    setLoadingFiles(true);
+    try { setFiles((await listWorkspaceFiles(workflowId("build"), workspace)).files); } catch { setFiles([]); }
+    finally { setLoadingFiles(false); }
+  }, [workspace]);
+  useEffect(() => { void refreshCatalog(); const timer = window.setInterval(() => void refreshCatalog(), 30000); return () => window.clearInterval(timer); }, [refreshCatalog]);
+  useEffect(() => { void refreshFiles(); }, [refreshFiles]);
+  useEffect(() => { localStorage.setItem(storageKey(workspace), JSON.stringify(project)); }, [workspace, project]);
+  const applyWorkspace = () => { const next = workspaceDraft.trim(); if (!next || next === workspace) return; localStorage.setItem("xs2-novel-workspace", next); setWorkspace(next); setProject(restore(next)); setView("home"); };
+  const hasWorkflow = (id: string) => catalog.some((item) => item.workflow_id === workflowId(id));
+  const stepItems = useMemo(() => {
+    const known = STAGES.filter((stage) => !stage.optional || hasWorkflow(stage.id));
+    const dynamic = catalog.filter((item) => item.definition?.console?.app === "novel-workbench" && !known.some((stage) => workflowId(stage.id) === item.workflow_id)).map((item) => {
+      const consoleMeta = item.definition?.console || {};
+      const id = item.workflow_id.slice(PREFIX.length);
+      return { id, title: consoleMeta.title || item.name, group: consoleMeta.group || "扩展流程", description: consoleMeta.description || "由插件工作流提供的创作步骤。", artifact: consoleMeta.artifact || "", optional: true, preferredFields: [] };
+    }).sort((left, right) => (catalog.find((item) => workflowId(left.id) === item.workflow_id)?.definition?.console?.order || 999) - (catalog.find((item) => workflowId(right.id) === item.workflow_id)?.definition?.console?.order || 999));
+    return [...known, ...dynamic];
+  }, [catalog]);
+  const chapterFiles = files.filter((file) => /^story\/\d{4}\/chapter\.md$/i.test(file.path));
+  const chapters = chapterFiles.map((file) => ({ number: file.path.match(/story\/(\d{4})/)?.[1] || "0000", file }));
+  const openFlow = (index = project.index) => { setProject((current) => ({ ...current, index: Math.max(0, Math.min(index, Math.max(stepItems.length - 1, 0))) })); setView("flow"); };
+  const resetNew = (mode: Mode) => { setProject({ ...restore(workspace), title: "未命名作品", mode, autoScope: mode === "short" ? "short_full" : "serial_batch", autoChapterLimit: mode === "short" ? 1 : 3 }); setView("flow"); };
+  return <div className="h-full overflow-hidden bg-background"><div className="flex h-full min-h-0"><aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card/80 lg:flex"><div className="border-b border-border px-6 py-6"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/15 text-primary"><BookOpen className="h-5 w-5" /></div><div><p className="font-semibold tracking-wide">XS2</p><p className="text-xs text-muted-foreground">小说工作台</p></div></div></div><nav className="space-y-1 p-4"><SidebarButton active={view === "home"} icon={BookOpen} label="我的作品" onClick={() => setView("home")} /><SidebarButton active={view === "chapters"} icon={ListChecks} label="章节目录" onClick={() => setView("chapters")} /><SidebarButton active={view === "flow"} icon={WandSparkles} label="创作流程" onClick={() => setView("flow")} /><SidebarButton active={view === "review"} icon={Headphones} label="读者评估" onClick={() => setView("review")} /><SidebarButton active={false} icon={FolderOpen} label="参考资料" onClick={() => openFlow(0)} /><SidebarButton active={false} icon={Settings2} label="作品设置" onClick={() => setView("home")} /></nav><div className="mt-auto border-t border-border p-4"><button onClick={() => setView("flow")} className="flex w-full items-center gap-3 rounded-xl border border-primary/30 bg-primary/10 px-3 py-3 text-left text-sm"><Sparkles className="h-4 w-4 text-primary" /><span><span className="block font-medium">AI 创作助手</span><span className="mt-1 block text-xs text-muted-foreground">随时帮你规划后续</span></span></button></div></aside><main className="min-w-0 flex-1 overflow-y-auto"><header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background/90 px-5 py-4 backdrop-blur lg:px-8"><div className="flex items-center gap-3"><div className="max-w-[360px] truncate rounded-lg border border-border bg-card px-3 py-2 text-xs">工作区 · {workspace}</div><span className="hidden text-xs text-muted-foreground xl:inline">工作区中的作品资料会持续保存</span></div><div className="flex items-center gap-3"><button onClick={refreshFiles} className="rounded-lg border border-border p-2 text-muted-foreground hover:text-foreground" title="刷新作品文件"><RefreshCw className={`h-4 w-4 ${loadingFiles ? "animate-spin" : ""}`} /></button><button onClick={() => setView("flow")} className="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground"><MessageCircle className="h-4 w-4" />AI 助手</button></div></header><div className="mx-auto max-w-[1500px] px-5 py-6 lg:px-8">{view === "home" && <HomeView project={project} chapters={chapters} files={files} workspaceDraft={workspaceDraft} setWorkspaceDraft={setWorkspaceDraft} applyWorkspace={applyWorkspace} catalogError={catalogError} onNew={resetNew} onContinue={() => openFlow(project.index)} onChapters={() => setView("chapters")} />}{view === "chapters" && <ChapterView project={project} chapters={chapters} workspace={workspace} onBack={() => setView("home")} onOpen={(chapter) => { setProject((current) => ({ ...current, values: { ...current.values, chapter_number: chapter } })); setView("review"); }} />}{view === "review" && <ReviewView project={project} workspace={workspace} chapter={project.values.chapter_number} onBack={() => setView("chapters")} onFlow={() => setView("flow")} />}{view === "flow" && <FlowView project={project} setProject={setProject} stages={stepItems} currentStage={stepItems[project.index] || stepItems[0]} catalog={catalog} workspace={workspace} files={files} chapters={chapters} onHome={() => setView("home")} onRefreshCatalog={refreshCatalog} onRefreshFiles={refreshFiles} onReview={() => setView("review")} />}</div></main></div></div>;
 }
+
+function SidebarButton({ active, icon: Icon, label, onClick }: { active: boolean; icon: typeof BookOpen; label: string; onClick: () => void }) { return <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}><Icon className="h-4 w-4" />{label}</button>; }
+
+function HomeView({ project, chapters, files, workspaceDraft, setWorkspaceDraft, applyWorkspace, catalogError, onNew, onContinue, onChapters }: { project: Project; chapters: Array<{ number: string; file: WorkspaceFile }>; files: WorkspaceFile[]; workspaceDraft: string; setWorkspaceDraft: (value: string) => void; applyWorkspace: () => void; catalogError: string; onNew: (mode: Mode) => void; onContinue: () => void; onChapters: () => void }) {
+  const totalChars = chapters.reduce((sum, item) => sum + item.file.size_bytes, 0);
+  return <div className="space-y-6"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary">XS2 小说工作台</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">我的作品</h1><p className="mt-2 text-sm text-muted-foreground">从一个创意开始，持续写完你的故事。</p></div><div className="flex gap-2"><button onClick={() => onNew("short")} className="rounded-xl border border-border px-4 py-2.5 text-sm">新建短篇</button><button onClick={() => onNew("serial")} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">新建长篇连载</button></div></div>{catalogError && <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><CircleAlert className="h-4 w-4" />工作流目录暂时无法刷新，已保留本地作品状态。</div>}<section className={`${cardClass} overflow-hidden bg-gradient-to-br from-primary/15 via-card to-card`}><div className="grid gap-6 p-6 lg:grid-cols-[1fr_0.8fr]"><div><div className="flex items-center gap-2 text-xs text-muted-foreground"><Clock3 className="h-4 w-4" />继续上次创作</div><div className="mt-4 flex flex-wrap items-center gap-4"><div className="flex h-24 w-20 items-center justify-center rounded-xl bg-primary/15 text-primary"><BookOpen className="h-8 w-8" /></div><div><div className="flex items-center gap-2"><h2 className="text-2xl font-semibold">{project.title}</h2><span className="rounded-full bg-secondary px-2 py-1 text-xs">{project.mode === "serial" ? "长篇连载" : "短篇"}</span></div><p className="mt-2 text-sm text-muted-foreground">当前步骤：{STAGES[project.index]?.title || "开始创作"} · 第 {project.values.chapter_number} 章</p><p className="mt-1 text-sm text-muted-foreground">工作区已有 {chapters.length} 章 · {Math.max(totalChars, 0).toLocaleString()} 字符</p></div></div><button onClick={onContinue} className="mt-5 flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">继续创作 <ArrowRight className="h-4 w-4" /></button></div><div className="rounded-2xl border border-border/70 bg-background/40 p-5"><div className="flex items-center justify-between text-sm"><span>作品进度</span><span className="text-muted-foreground">{chapters.length ? `第 ${chapters.length} 章` : "尚未开始"}</span></div><div className="mt-4 h-2 rounded-full bg-secondary"><div className="h-2 rounded-full bg-primary" style={{ width: `${Math.min(100, Math.max(4, chapters.length * 5))}%` }} /></div><div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs text-muted-foreground"><div><Gauge className="mx-auto mb-1 h-4 w-4" />累计字符</div><div><ListChecks className="mx-auto mb-1 h-4 w-4" />章节目录</div><div><Sparkles className="mx-auto mb-1 h-4 w-4" />读者评估</div></div></div></div></section><div className="grid gap-6 xl:grid-cols-[1fr_360px]"><section><div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-semibold">作品资料</h2><button onClick={onChapters} className="text-sm text-primary">查看章节目录</button></div><div className="grid gap-4 md:grid-cols-2"><ProjectCard mode="serial" title={project.title} description="固定工作区保存世界观、卷纲、章节和读者报告。" chapters={chapters.length} chars={totalChars} onOpen={onContinue} /><ProjectCard mode="short" title="新故事" description="从创意和小说顾问开始，按一次成稿流程推进。" chapters={0} chars={0} onOpen={() => onNew("short")} /></div></section><aside className={`${cardClass} p-5`}><div className="flex items-center gap-2"><FolderOpen className="h-4 w-4 text-primary" /><h2 className="font-semibold">作品工作区</h2></div><p className="mt-2 text-xs leading-5 text-muted-foreground">页面会读取工作区中的章节和资料，因此换浏览器后仍能看到作品内容。</p><input value={workspaceDraft} onChange={(event) => setWorkspaceDraft(event.target.value)} className={`${inputClass} mt-4 text-xs`} /><button onClick={applyWorkspace} className="mt-2 w-full rounded-xl border border-border px-3 py-2 text-xs">切换工作区</button><div className="mt-5 border-t border-border pt-4 text-xs text-muted-foreground">已发现 {files.length} 个可读文件</div></aside></div></div>;
+}
+
+function ProjectCard({ mode, title, description, chapters, chars, onOpen }: { mode: Mode; title: string; description: string; chapters: number; chars: number; onOpen: () => void }) { return <div className={`${cardClass} p-5`}><div className="flex items-start justify-between"><div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary"><BookOpen className="h-5 w-5" /></div><span className="rounded-full bg-secondary px-2 py-1 text-xs">{mode === "serial" ? "长篇连载" : "短篇"}</span></div><h3 className="mt-4 text-lg font-semibold">{title}</h3><p className="mt-2 min-h-10 text-sm leading-5 text-muted-foreground">{description}</p><div className="mt-4 flex gap-4 text-xs text-muted-foreground"><span>{chapters ? `${chapters} 章` : "未开始"}</span><span>{chars ? `${chars.toLocaleString()} 字符` : "等待创意"}</span></div><button onClick={onOpen} className="mt-5 w-full rounded-xl border border-primary/30 px-3 py-2.5 text-sm text-primary">{chapters ? "继续创作" : "开始创作"}</button></div>; }
+
+function ChapterView({ project, chapters, workspace, onBack, onOpen }: { project: Project; chapters: Array<{ number: string; file: WorkspaceFile }>; workspace: string; onBack: () => void; onOpen: (chapter: string) => void }) { return <div className="space-y-5"><PageHeader eyebrow="章节目录" title={`${project.title} · 章节目录`} description="查看已写内容、字数和每章的质量状态。" onBack={onBack} /><section className={`${cardClass} overflow-hidden`}><div className="grid grid-cols-[100px_1fr_130px_100px] gap-3 border-b border-border bg-secondary/40 px-5 py-3 text-xs text-muted-foreground"><span>章节</span><span>文件</span><span>字数</span><span>操作</span></div>{chapters.length === 0 && <p className="p-8 text-center text-sm text-muted-foreground">工作区里还没有章节正文。</p>}{chapters.map((item) => <div key={item.number} className="grid grid-cols-[100px_1fr_130px_100px] items-center gap-3 border-b border-border px-5 py-4 text-sm last:border-0"><span className="font-semibold">第 {Number(item.number)} 章</span><span className="truncate text-muted-foreground">{item.file.path}</span><span className="text-muted-foreground">{Math.round(item.file.size_bytes / 1.8).toLocaleString()} 字符</span><button onClick={() => onOpen(item.number)} className="text-left text-primary">阅读</button></div>)}</section><p className="text-xs text-muted-foreground">当前工作区：{workspace}</p></div>; }
+
+function PageHeader({ eyebrow, title, description, onBack }: { eyebrow: string; title: string; description: string; onBack: () => void }) { return <div className="flex flex-wrap items-start justify-between gap-4"><div><button onClick={onBack} className="mb-3 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"><ArrowLeft className="h-3 w-3" />返回作品</button><p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">{eyebrow}</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">{title}</h1><p className="mt-2 text-sm text-muted-foreground">{description}</p></div></div>; }
+
+function ReviewView({ project, workspace, chapter, onBack, onFlow }: { project: Project; workspace: string; chapter: string; onBack: () => void; onFlow: () => void }) {
+  const [content, setContent] = useState("");
+  const [report, setReport] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setReport(null);
+    const chapterPromise = readWorkspaceFile(workflowId("mvp"), workspace, `story/${chapter}/chapter.md`);
+    const reportPromise = readWorkspaceFile(workflowId("reader-sim"), workspace, "quality/reader_report.json");
+    void Promise.allSettled([chapterPromise, reportPromise]).then(([chapterResult, reportResult]) => {
+      if (!active) return;
+      if (chapterResult.status === "fulfilled") setContent(chapterResult.value.content);
+      else setContent("");
+      if (reportResult.status === "fulfilled") {
+        try { setReport(JSON.parse(reportResult.value.content) as Record<string, unknown>); } catch { setReport(null); }
+      }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [chapter, workspace]);
+  const verdict = typeof report?.verdict === "string" ? report.verdict : "";
+  const score = typeof report?.continue_reading_score === "number" ? report.continue_reading_score : null;
+  const issues = Array.isArray(report?.issues) ? report.issues.map(String) : [];
+  return <div className="space-y-5"><PageHeader eyebrow="模拟读者" title={`第 ${Number(chapter)} 章 · 章节阅读`} description="阅读已有正文，查看读者评估或继续返修。" onBack={onBack} /><div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]"><section className={`${cardClass} p-6`}><div className="flex items-center justify-between"><h2 className="font-semibold">正文预览</h2><span className="text-xs text-muted-foreground">{loading ? "正在读取" : content ? `${content.length.toLocaleString()} 字符` : "暂无正文"}</span></div><pre className="mt-5 max-h-[650px] overflow-auto whitespace-pre-wrap font-sans text-sm leading-7 text-foreground/90">{content || "还没有找到这一章的正文。可以回到创作流程生成。"}</pre></section><aside className="space-y-5"><section className={`${cardClass} p-5`}><div className="flex items-center gap-2"><Headphones className="h-4 w-4 text-primary" /><h2 className="font-semibold">模拟读者评估</h2></div><div className="mt-5 flex items-end gap-3"><span className={`text-5xl font-semibold ${verdict === "revise" ? "text-amber-300" : "text-emerald-300"}`}>{score ?? "—"}</span><span className="mb-2 text-sm text-muted-foreground">{verdict === "revise" ? "建议返修" : verdict === "pass" ? "可以继续" : "等待工作流报告"}</span></div>{issues.length > 0 && <div className="mt-4 rounded-xl bg-secondary/40 p-3 text-xs leading-5 text-muted-foreground"><p className="font-medium text-foreground">读者指出的问题</p>{issues.slice(0, 4).map((issue, index) => <p key={index} className="mt-1">· {issue}</p>)}</div>}<p className="mt-3 text-sm leading-6 text-muted-foreground">完成模拟读者工作流后，这里会显示继续阅读意愿、开头钩子、中段节奏、章末悬念和返修建议。</p><button onClick={onFlow} className="mt-5 w-full rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">进入评估流程</button></section><section className={`${cardClass} p-5`}><div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary" /><h2 className="font-semibold">AI 助手</h2></div><p className="mt-3 text-sm leading-6 text-muted-foreground">可以告诉助手这一章想加强的看点，生成返修计划后再运行工作流。</p><button onClick={onFlow} className="mt-4 w-full rounded-xl border border-border px-3 py-2.5 text-sm">让助手规划返修</button></section></aside></div></div>; }
+
+function FlowView({ project, setProject, stages, currentStage, catalog, workspace, files, chapters, onHome, onRefreshCatalog, onRefreshFiles, onReview }: { project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; stages: StageMeta[]; currentStage: StageMeta; catalog: CatalogItem[]; workspace: string; files: WorkspaceFile[]; chapters: Array<{ number: string; file: WorkspaceFile }>; onHome: () => void; onRefreshCatalog: () => Promise<void>; onRefreshFiles: () => Promise<void>; onReview: () => void }) {
+  const [task, setTask] = useState<any>(null); const [verified, setVerified] = useState(false); const [launching, setLaunching] = useState(false); const [error, setError] = useState(""); const [preview, setPreview] = useState(""); const [candidateSet, setCandidateSet] = useState<{ candidates: Array<{ candidate_id: string; mechanism: string; transfer_guidance: string; constraints: string[] }>; candidates_sha256: string } | null>(null); const [showAllFields, setShowAllFields] = useState(false);
+  const launchGuard = useRef(false); const autoAdvancedKey = useRef(""); const autoStartedKey = useRef(""); const autoStartIndex = useRef<number | null>(null); const stageIndex = Math.max(0, stages.findIndex((item) => item.id === currentStage.id)); const ref = project.refs[currentStage.id]; const workflow = catalog.find((item) => item.workflow_id === workflowId(currentStage.id)); const busy = launching || (!!task && !terminal.includes(task.status)); const done = verified && task?.status === "completed" && task.workflow_id === workflowId(currentStage.id) && task.task_id === ref?.task_id; const variables = workflow?.definition?.variables || [];
+  const visibleVariables = useMemo(() => { const inputs = variables.filter((field) => field.source_type !== "output" && !field.hidden && field.type !== "file"); if (showAllFields) return inputs; const preferred = currentStage.preferredFields || []; const selected = inputs.filter((field) => preferred.includes(field.key) || field.required); return selected.length ? selected : inputs.slice(0, 6); }, [currentStage.preferredFields, showAllFields, variables]);
+  const available = !!workflow; const update = (key: string, value: string) => setProject((current) => ({ ...current, values: { ...current.values, [key]: value } })); const valueFor = (field: WorkflowVariable) => project.values[field.key] ?? field.default ?? FALLBACK_DEFAULTS[field.key] ?? "";
+  useEffect(() => { let active = true; setTask(null); setVerified(false); setPreview(""); setError(""); if (!ref) return; const refresh = async () => { try { const result = await getTask(ref.workflow_id, ref.task_id); if (!active) return; setTask(result.task); if (result.task.status === "completed") { try { const output = await readWorkflowWorkspaceFile(ref.workflow_id, ref.task_id, currentStage.artifact.replace("{chapter}", project.values.chapter_number || "0001")); if (active) { setPreview(output.content); setVerified(!!output.content.trim()); } } catch { if (active) setVerified(true); } } } catch (failure) { if (active) setError(failure instanceof Error ? failure.message : "读取任务失败"); } }; void refresh(); const timer = window.setInterval(refresh, 3000); return () => { active = false; window.clearInterval(timer); }; }, [currentStage.artifact, currentStage.id, project.values.chapter_number, ref?.task_id, ref?.workflow_id]);
+  useEffect(() => { let active = true; const source = project.refs["reference-distillation"]; if (!source || currentStage.id !== "adopt-reference") return; void readWorkflowWorkspaceFile(source.workflow_id, source.task_id, "learning/candidates.json").then((output) => { if (active) setCandidateSet(JSON.parse(output.content)); }).catch(() => { if (active) setCandidateSet(null); }); return () => { active = false; }; }, [currentStage.id, project.refs["reference-distillation"]?.task_id]);
+  const launch = useCallback(async () => { if (launchGuard.current || busy || done) return; launchGuard.current = true; setLaunching(true); setError(""); try { if (!available) throw new Error("当前工作流还没有被插件目录提供，请刷新工作流目录后重试。"); const definition = (await getWorkflow(workflowId(currentStage.id))).definition; const parameters: Record<string, string> = { ...project.values }; if (currentStage.id === "adopt-reference") { if (!candidateSet) throw new Error("还没有读取到蒸馏结果。"); parameters.selection_json = JSON.stringify({ candidates_sha256: candidateSet.candidates_sha256, selected_candidate_ids: project.selected }); } const inputs = Object.fromEntries((definition.variables || []).filter((field) => field.source_type !== "output" && field.type !== "file" && parameters[field.key] !== undefined).map((field) => [field.key, parameters[field.key]])); const missing = (definition.variables || []).find((field) => field.required && !field.hidden && field.type !== "file" && !(inputs[field.key] ?? field.default ?? "").trim()); if (missing) throw new Error(`请先填写${missing.name || missing.key}。`); const created = await createTask(workflowId(currentStage.id), inputs, undefined, undefined, workspace); const nextRef = { workflow_id: workflowId(currentStage.id), task_id: created.task_id }; setProject((current) => ({ ...current, refs: { ...current.refs, [currentStage.id]: nextRef }, directionConfirmed: currentStage.id !== "reference-distillation" || true, advisorAccepted: currentStage.id === "novel-advisor" ? true : current.advisorAccepted })); await runTask(workflowId(currentStage.id), created.task_id); setTask({ ...nextRef, status: "running", name: definition.name }); } catch (failure) { setError(failure instanceof Error ? failure.message : "启动失败"); } finally { launchGuard.current = false; setLaunching(false); } }, [available, busy, candidateSet, currentStage.id, done, project.selected, project.values, workspace]);
+  const readerNeedsRepair = currentStage.id === "reader-sim" && /"verdict"\s*:\s*"(?:revise|reject)"/i.test(preview);
+  const completeAndNext = useCallback(() => { if (!done || stageIndex >= stages.length - 1) return; const repairIndex = stages.findIndex((item) => item.id === "polish"); const nextIndex = readerNeedsRepair && repairIndex >= 0 ? repairIndex : stageIndex + 1; autoStartIndex.current = project.autoNext && project.autoScope !== "manual" ? nextIndex : null; setProject((current) => ({ ...current, index: nextIndex, completed: [...new Set([...current.completed, currentStage.id])], advisorAccepted: currentStage.id === "novel-advisor" ? true : current.advisorAccepted })); }, [currentStage.id, done, project.autoNext, project.autoScope, readerNeedsRepair, stageIndex, stages, setProject]);
+  const nextChapter = useCallback(() => { const current = Number(project.values.chapter_number || "1"); setProject((state) => ({ ...state, index: Math.max(0, stages.findIndex((item) => item.id === "mvp")), completed: state.completed.filter((id) => !["mvp", "polish", "reader-sim", "post-hoc", "export"].includes(id)), refs: Object.fromEntries(Object.entries(state.refs).filter(([id]) => !["mvp", "polish", "reader-sim", "post-hoc", "export"].includes(id))), values: { ...state.values, latest_chapter: String(current).padStart(4, "0"), prev_chapter: String(current).padStart(4, "0"), chapter_number: String(current + 1).padStart(4, "0"), human_intent: "", world_intent: "" } })); }, [project.values.chapter_number, setProject, stages]);
+  useEffect(() => { if (!project.autoNext || project.autoScope === "manual" || !done) return; const key = `${currentStage.id}:${ref?.task_id || ""}`; if (autoAdvancedKey.current === key) return; autoAdvancedKey.current = key; if (currentStage.id === "export" && project.mode === "serial" && project.autoScope === "serial_batch" && (project.autoChapterStarted || 1) < project.autoChapterLimit) { setProject((state) => ({ ...state, autoChapterStarted: (state.autoChapterStarted || 1) + 1 })); nextChapter(); return; } if (stageIndex < stages.length - 1) completeAndNext(); }, [completeAndNext, currentStage.id, done, nextChapter, project.autoChapterLimit, project.autoChapterStarted, project.autoNext, project.autoScope, project.mode, ref?.task_id, stageIndex, stages.length, setProject]);
+  useEffect(() => { if (!project.autoNext || project.autoScope === "manual" || autoStartIndex.current !== stageIndex || ref || launching || task) return; const key = `${currentStage.id}:${stageIndex}`; if (autoStartedKey.current === key) return; autoStartedKey.current = key; autoStartIndex.current = null; if (currentStage.optional && !available) { setError("这一步对应的工作流还未安装，自动流程已暂停。"); return; } void launch(); }, [available, currentStage.id, currentStage.optional, launch, launching, project.autoNext, project.autoScope, ref, stageIndex, task]);
+  const setAuto = (checked: boolean) => setProject((current) => ({ ...current, autoNext: checked, autoScope: checked ? (current.mode === "serial" ? "serial_batch" : "short_full") : "manual", autoChapterStarted: checked && current.mode === "serial" ? 1 : null }));
+  const fieldsForStage = currentStage.id === "adopt-reference" ? [] : visibleVariables;
+  return <div className="space-y-6"><div className="flex flex-wrap items-start justify-between gap-4"><div><button onClick={onHome} className="mb-3 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"><ArrowLeft className="h-3 w-3" />返回作品</button><div className="flex flex-wrap items-center gap-3"><h1 className="text-3xl font-semibold tracking-tight">{project.title}</h1><span className="rounded-full bg-secondary px-2.5 py-1 text-xs">{project.mode === "serial" ? "长篇连载" : "短篇"}</span><span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary">工作流版本 {workflow?.version ?? "—"}</span></div><p className="mt-2 text-sm text-muted-foreground">{project.mode === "serial" ? `第 ${project.values.chapter_number} 章 · 自动计划最多推进 ${project.autoChapterLimit} 章` : "短篇可以在确认方向后自动完成本篇"}</p></div><div className="flex flex-wrap gap-2"><button onClick={() => void onRefreshCatalog()} className="rounded-xl border border-border px-3 py-2 text-xs"><RefreshCw className="mr-1 inline h-3.5 w-3.5" />刷新工作流</button><button onClick={() => void onRefreshFiles()} className="rounded-xl border border-border px-3 py-2 text-xs"><FolderOpen className="mr-1 inline h-3.5 w-3.5" />刷新作品资料</button></div></div><section className={`${cardClass} p-4`}><div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><Sparkles className="h-5 w-5" /></div><div><p className="font-medium">自动下一步</p><p className="text-xs text-muted-foreground">蒸馏或原创方向确认完成后，才会自动启动后续工作流。</p></div></div><div className="flex flex-wrap items-center gap-3"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={project.autoNext} disabled={busy} onChange={(event) => setAuto(event.target.checked)} />启用</label>{project.autoNext && <><select value={project.autoScope} onChange={(event) => setProject((current) => ({ ...current, autoScope: event.target.value as AutoScope }))} className="rounded-lg border border-border bg-background px-2 py-2 text-xs"><option value="short_full">自动完成本篇</option><option value="serial_batch">自动推进指定章节</option></select>{project.mode === "serial" && <select value={project.autoChapterLimit} onChange={(event) => setProject((current) => ({ ...current, autoChapterLimit: Number(event.target.value), autoChapterStarted: 1 }))} className="rounded-lg border border-border bg-background px-2 py-2 text-xs"><option value={1}>1 章</option><option value={3}>3 章</option><option value={5}>5 章</option><option value={10}>10 章</option></select>}</>}</div></div></section><div className="grid gap-6 xl:grid-cols-[250px_minmax(0,1fr)_320px]"><aside className="space-y-4"><div className={`${cardClass} p-4`}><p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">创作进度</p><ol className="space-y-1">{stages.map((stage, index) => <li key={stage.id}><button onClick={() => { if (stage.id === currentStage.id || project.completed.includes(stage.id)) setProject((current) => ({ ...current, index })); }} disabled={stage.id !== currentStage.id && !project.completed.includes(stage.id)} className={`flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-left ${index === stageIndex ? "bg-primary/10 text-primary" : project.completed.includes(stage.id) ? "text-foreground" : "text-muted-foreground"}`}><span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs ${project.completed.includes(stage.id) ? "bg-emerald-400/15 text-emerald-300" : index === stageIndex ? "bg-primary text-primary-foreground" : "bg-secondary"}`}>{project.completed.includes(stage.id) ? <Check className="h-3 w-3" /> : index + 1}</span><span><span className="block text-sm">{stage.title}</span><span className="mt-0.5 block text-[11px] opacity-70">{stage.group}</span></span></button></li>)}</ol></div><div className={`${cardClass} p-4`}><p className="text-xs text-muted-foreground">当前工作区</p><p className="mt-2 break-all text-xs leading-5">{workspace}</p><p className="mt-3 text-xs text-muted-foreground">已发现 {files.length} 个资料文件 · {chapters.length} 章正文</p></div></aside><section className={`${cardClass} min-w-0 p-6`}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs text-primary">第 {stageIndex + 1} 步 / 共 {stages.length} 步</p><h2 className="mt-2 text-2xl font-semibold">{currentStage.title}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{currentStage.description}</p></div><div className="flex items-center gap-2 text-xs text-muted-foreground">{available ? <><span className="h-2 w-2 rounded-full bg-emerald-400" />工作流已连接</> : <><span className="h-2 w-2 rounded-full bg-amber-400" />等待插件工作流</>}</div></div>{currentStage.id !== "reference-distillation" && <div className="mt-5 rounded-xl border border-border bg-secondary/30 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><label className="flex items-center gap-2 text-sm font-medium">作品模式<select value={project.mode} disabled={stageIndex > 0} onChange={(event) => setProject((current) => ({ ...current, mode: event.target.value as Mode, autoScope: event.target.value === "serial" ? "serial_batch" : "short_full" }))} className="ml-2 rounded-lg border border-border bg-background px-2 py-1.5 text-xs"><option value="short">短篇</option><option value="serial">长篇连载</option></select></label><span className="text-xs text-muted-foreground">{project.mode === "serial" ? "本次可自动推进指定章数" : "本次可自动完成本篇"}</span></div></div>}{currentStage.id === "adopt-reference" && <CandidateChooser candidateSet={candidateSet} selected={project.selected} setProject={setProject} />}{currentStage.id !== "adopt-reference" && <div className="mt-6 space-y-4">{fieldsForStage.map((field) => <WorkflowField key={field.key} field={field} value={valueFor(field)} disabled={busy || done} onChange={(value) => update(field.key, value)} />)}{variables.filter((field) => !field.hidden && field.source_type !== "output" && field.type !== "file").length > fieldsForStage.length && <button onClick={() => setShowAllFields((value) => !value)} className="flex items-center gap-1 text-xs text-primary">{showAllFields ? "收起参数" : "查看全部参数"}<ChevronDown className={`h-3 w-3 transition ${showAllFields ? "rotate-180" : ""}`} /></button>}</div>}{error && <p role="alert" className="mt-5 flex gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><CircleAlert className="h-4 w-4 shrink-0" />{error}</p>}<div className="mt-6 flex flex-wrap gap-3">{!done && <button onClick={() => void launch()} disabled={busy || !available || (currentStage.id === "adopt-reference" && !candidateSet)} className="flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{busy ? "正在执行" : task?.status === "failed" ? "重新执行" : "开始当前步骤"}</button>}{done && stageIndex < stages.length - 1 && <button onClick={completeAndNext} className="flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground">{readerNeedsRepair ? "进入定向返修" : currentStage.id === "post-hoc" ? "进入导出" : "下一步"}<ArrowRight className="h-4 w-4" /></button>}{done && ["post-hoc", "export"].includes(currentStage.id) && <button onClick={nextChapter} className="rounded-xl border border-primary/40 px-5 py-3 text-sm font-semibold text-primary">继续写下一章</button>}{currentStage.id === "reader-sim" && <button onClick={onReview} className="rounded-xl border border-border px-5 py-3 text-sm">查看章节正文</button>}</div></section><AssistantPanel project={project} setProject={setProject} currentStage={currentStage} nextStage={stages[stageIndex + 1]} definition={catalog.find((item) => item.workflow_id === workflowId(stages[stageIndex + 1]?.id || ""))?.definition} /></div><section className={`${cardClass} p-4`}><div className="flex items-center gap-3 text-sm"><FileText className="h-4 w-4 text-primary" /><span>当前产物</span><span className="font-mono text-xs text-muted-foreground">{currentStage.artifact.replace("{chapter}", project.values.chapter_number || "0001")}</span><span className="ml-auto text-xs text-muted-foreground">{task ? statusLabel(task.status) : ref ? "正在恢复状态" : "尚未执行"}</span></div>{preview && <details className="mt-3"><summary className="cursor-pointer text-xs text-primary">预览已生成内容</summary><pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-secondary/40 p-4 text-xs leading-6">{preview}</pre></details>}</section></div>;
+}
+
+function WorkflowField({ field, value, disabled, onChange }: { field: WorkflowVariable; value: string; disabled: boolean; onChange: (value: string) => void }) { const options = field.options?.length ? field.options : field.key === "writer_type" ? [{ name: "单写手", value: "single" }, { name: "多写手", value: "muti" }] : field.key === "narrative_pov" ? [{ name: "第一人称（我）", value: "first_person" }, { name: "第三人称（他 / 她）", value: "third_person" }] : []; return <label className="block"><span className="mb-2 flex items-center gap-2 text-sm font-medium">{field.name || LABELS[field.key] || field.key}{field.required && <span className="text-[11px] text-amber-400">必填</span>}</span>{options.length ? <select disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} className={inputClass}>{options.map((option) => <option key={option.value} value={option.value}>{option.name}</option>)}</select> : field.type === "textarea" || field.key.includes("intent") || field.key === "premise" ? <textarea disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} rows={4} className={inputClass} /> : <input disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} className={inputClass} />}<span className="mt-1 block text-xs text-muted-foreground">{field.description || (field.required ? "这是工作流定义中的必填参数。" : "可留空，工作流会使用默认值。")}</span></label>; }
+
+function CandidateChooser({ candidateSet, selected, setProject }: { candidateSet: { candidates: Array<{ candidate_id: string; mechanism: string; transfer_guidance: string; constraints: string[] }>; candidates_sha256: string } | null; selected: string[]; setProject: React.Dispatch<React.SetStateAction<Project>> }) { if (!candidateSet) return <div className="mt-6 rounded-xl border border-amber-300/30 bg-amber-300/10 p-4 text-sm text-amber-200">正在等待蒸馏结果，完成上一阶段后刷新此页。</div>; return <div className="mt-6 space-y-3"><div className="flex items-center justify-between"><p className="text-sm font-medium">选择要带入本书的写法</p><span className="text-xs text-muted-foreground">已选 {selected.length} 条</span></div>{candidateSet.candidates.length === 0 && <p className="rounded-xl border border-border p-4 text-sm text-muted-foreground">没有提炼出候选机制，可以保持原创设定。</p>}{candidateSet.candidates.map((candidate) => <label key={candidate.candidate_id} className={`block cursor-pointer rounded-xl border p-4 transition ${selected.includes(candidate.candidate_id) ? "border-primary/50 bg-primary/10" : "border-border hover:border-primary/30"}`}><div className="flex gap-3"><input type="checkbox" checked={selected.includes(candidate.candidate_id)} onChange={(event) => setProject((current) => ({ ...current, selected: event.target.checked ? [...current.selected, candidate.candidate_id] : current.selected.filter((id) => id !== candidate.candidate_id) }))} /><div><p className="text-sm font-semibold">{candidate.mechanism}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">{candidate.transfer_guidance}</p><p className="mt-2 text-xs text-muted-foreground">边界：{candidate.constraints.join("；")}</p></div></div></label>)}</div>; }
+
+function AssistantPanel({ project, setProject, currentStage, nextStage, definition }: { project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; currentStage: StageMeta; nextStage?: StageMeta; definition?: WorkflowDefinition }) { const nextInputs = (definition?.variables || []).filter((field) => field.source_type !== "output" && !field.hidden && field.type !== "file"); const missing = nextInputs.filter((field) => field.required && !(project.values[field.key] ?? field.default ?? "").trim()); const ask = () => setProject((current) => ({ ...current, assistantPlan: current.assistantPlan || `请为${nextStage?.title || "下一步"}规划必要参数、章节看点和自动执行范围。` })); return <aside className={`${cardClass} h-fit p-5 xl:sticky xl:top-24`}><div className="flex items-center gap-2"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary"><Sparkles className="h-4 w-4" /></div><div><h3 className="font-semibold">AI 创作助手</h3><p className="text-xs text-emerald-400">实时检查后续流程</p></div></div><div className="mt-5 rounded-xl bg-secondary/40 p-4"><p className="text-sm leading-6">{nextStage ? `完成「${currentStage.title}」后，下一步是「${nextStage.title}」。` : "当前已经是最后一步。"}</p>{nextStage && <><p className="mt-3 text-xs leading-5 text-muted-foreground">{nextInputs.length ? `会读取 ${nextInputs.slice(0, 4).map((field) => field.name || LABELS[field.key] || field.key).join("、")}${nextInputs.length > 4 ? "等参数" : ""}。` : "这个步骤不需要额外填写参数。"}</p>{missing.length > 0 && <p className="mt-3 flex gap-2 text-xs text-amber-300"><CircleAlert className="h-4 w-4 shrink-0" />还缺少：{missing.map((field) => field.name || LABELS[field.key] || field.key).join("、")}</p>}</>}</div><label className="mt-4 block text-xs font-medium">告诉助手接下来怎么安排<textarea value={project.assistantPlan} onChange={(event) => setProject((current) => ({ ...current, assistantPlan: event.target.value }))} rows={4} placeholder="例如：接下来自动写 3 章，每章 4000 字，章末保留悬念。" className={`${inputClass} mt-2 text-xs`} /></label><button onClick={ask} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/10 px-3 py-2.5 text-sm text-primary"><WandSparkles className="h-4 w-4" />生成后续计划</button><div className="mt-5 border-t border-border pt-4"><p className="text-xs font-medium">本次自动执行</p><div className="mt-3 space-y-2 text-xs text-muted-foreground"><p>模式：{project.mode === "serial" ? "长篇连载" : "短篇"}</p><p>范围：{project.mode === "serial" ? `最多 ${project.autoChapterLimit} 章` : "完成本篇"}</p><p>视角：{project.values.narrative_pov === "first_person" ? "第一人称" : "第三人称"}</p><p>字数：{project.values.target_word_count || "使用工作流默认值"}</p></div></div></aside>; }

@@ -478,6 +478,27 @@ export async function listWorkflows() {
   return request<Array<{ workflow_id: string; name: string; node_count: number; version: number; status?: string }>>("/workflows");
 }
 
+export async function listWorkspaceFiles(
+  workflowId: string,
+  workspace?: string,
+  prefix?: string,
+) {
+  const query = new URLSearchParams({ workflow_id: workflowId });
+  if (workspace) query.set("workspace", workspace);
+  if (prefix) query.set("prefix", prefix);
+  return request<{ workspace: string; files: Array<{ path: string; size_bytes: number; modified_at: number }> }>(
+    `/workflows/workspace-files?${query.toString()}`,
+  );
+}
+
+export async function readWorkspaceFile(workflowId: string, workspace: string | undefined, path: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, path });
+  if (workspace) query.set("workspace", workspace);
+  return request<{ workspace: string; path: string; content: string; size_bytes: number }>(
+    `/workflows/workspace-files/content?${query.toString()}`,
+  );
+}
+
 export async function getWorkflow(workflowId: string) {
   return request<{ definition: import("../types").WorkflowDefinition }>(`/workflows/${encodeURIComponent(workflowId)}`);
 }

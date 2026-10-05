@@ -10,7 +10,7 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..config import SESSIONS_DIR, WORKFLOWS_DIR
@@ -32,6 +32,80 @@ from .workflow_request_models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
+
+
+@router.get("/workspace-files")
+async def list_workspace_files(
+    request: Request,
+    workflow_id: str = Query(..., min_length=1),
+    workspace: str | None = Query(default=None),
+    prefix: str = Query(default=""),
+    limit: int = Query(default=500, ge=1, le=2000),
+):
+    """列出小说工作区中的可读文件，供作品控制台恢复历史内容。"""
+    mgr = _get_manager(request)
+    root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace)
+    from src.core.workspace_guard import WorkspaceGuard
+
+    guard = WorkspaceGuard()
+    checked = guard.validate_path(str(root), prefix or ".")
+    if not checked.allowed:
+        raise HTTPException(status_code=403, detail=checked.reason)
+    base = guard.get_effective_path(str(root), prefix or ".")
+    if base is None or not base.exists():
+        return {"workspace": str(root), "files": []}
+    files = []
+    for target in sorted(base.rglob("*"), key=lambda item: str(item).lower()):
+        if not target.is_file():
+            continue
+        relative = target.relative_to(root).as_posix()
+        if relative.startswith("cache/"):
+            continue
+        try:
+            stat = target.stat()
+        except OSError:
+            continue
+        files.append({
+            "path": relative,
+            "size_bytes": stat.st_size,
+            "modified_at": stat.st_mtime,
+        })
+        if len(files) >= limit:
+            break
+    return {"workspace": str(root), "files": files}
+
+
+@router.get("/workspace-files/content")
+async def read_workspace_file(
+    request: Request,
+    workflow_id: str = Query(..., min_length=1),
+    workspace: str | None = Query(default=None),
+    path: str = Query(..., min_length=1),
+):
+    """读取工作区内的 UTF-8 文本，供作品历史和审核页面展示。"""
+    mgr = _get_manager(request)
+    root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
+    from src.core.workspace_guard import WorkspaceGuard
+
+    guard = WorkspaceGuard()
+    checked = guard.validate_path(str(root), path)
+    if not checked.allowed:
+        raise HTTPException(status_code=403, detail=checked.reason)
+    target = guard.get_effective_path(str(root), path)
+    if target is None or not target.is_file():
+        raise HTTPException(status_code=404, detail="工作区文件不存在")
+    if target.stat().st_size > 2_000_000:
+        raise HTTPException(status_code=413, detail="预览文件超过 2 MB")
+    try:
+        content = target.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=415, detail="文件不是 UTF-8 文本") from exc
+    return {
+        "workspace": str(root),
+        "path": path,
+        "content": content,
+        "size_bytes": target.stat().st_size,
+    }
 
 
 # 变量 key 不允许以 _ 开头（保留给 _system.xxx 系统变量）

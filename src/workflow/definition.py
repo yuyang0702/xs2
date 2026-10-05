@@ -297,6 +297,7 @@ class WorkflowDef:
     gateways: list[WorkflowGateway] = field(default_factory=list)
     execution_schemes: list[ExecutionScheme] = field(default_factory=list)
     http_execution_policy: str = "public"
+    console: dict[str, Any] = field(default_factory=dict)
     start_position: dict[str, float] = field(default_factory=lambda: {"x": 300, "y": 50})
     end_position: dict[str, float] = field(default_factory=lambda: {"x": 300, "y": 550})
 
@@ -398,6 +399,7 @@ class WorkflowDef:
             "gateways": [g.to_dict() for g in self.gateways],
             "execution_schemes": [s.to_dict() for s in self.execution_schemes],
             "http_execution_policy": self.http_execution_policy,
+            "console": self.console,
             "start_position": self.start_position,
             "end_position": self.end_position,
         }
@@ -425,6 +427,7 @@ class WorkflowDef:
             variables=variables,
             gateways=gateways,
             execution_schemes=execution_schemes,
+            console=data.get("console", {}) if isinstance(data.get("console"), dict) else {},
             http_execution_policy=str(
                 data.get("http_execution_policy") or "public"
             ),

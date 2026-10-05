@@ -760,6 +760,7 @@ export interface ExecutionScheme {
 
 /** 工作流定义完整数据结构（API 返回） */
 export interface WorkflowDefinition {
+  console?: { app?: string; role?: string; order?: number; title?: string; group?: string; description?: string; artifact?: string; repeatable?: boolean; manual_confirmation?: boolean; view?: string };
   workflow_id: string;
   name: string;
   version: number;
