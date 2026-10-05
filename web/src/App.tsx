@@ -56,7 +56,7 @@ const CORE_TAB_METADATA: Record<CoreTabId, Omit<TabConfig, "value">> = {
   "system-prompt": { icon: FileText, label: "系统提示词", activeClass: CORE_ACTIVE_TAB_CLASS },
   settings: { icon: Settings, label: "配置", activeClass: CORE_ACTIVE_TAB_CLASS },
   extensions: { icon: Boxes, label: "插件", activeClass: CORE_ACTIVE_TAB_CLASS },
-  "novel-workbench": { icon: BookOpenText, label: "小说工作台", activeClass: CORE_ACTIVE_TAB_CLASS },
+  "novel-workbench": { icon: BookOpenText, label: "小说控制台", activeClass: CORE_ACTIVE_TAB_CLASS },
   "novel-market": { icon: Trophy, label: "市场趋势", activeClass: CORE_ACTIVE_TAB_CLASS },
 };
 

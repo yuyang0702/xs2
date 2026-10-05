@@ -256,10 +256,10 @@ export default function NovelWorkbenchPage() {
           </div>
         </section>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
           <section className="space-y-5">
             <div className="flex items-end justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Workflow map</p><h3 className="mt-1 text-xl font-semibold text-foreground">创作流程</h3></div><span className="text-xs text-muted-foreground">选择一个阶段开始</span></div>
-            <div className="grid gap-4 lg:grid-cols-3">
+            <div className="grid gap-4">
               {grouped.map((group) => (
                 <div key={group.key} className="space-y-3">
                   <div className="flex items-center gap-2 px-1 text-sm font-semibold text-foreground">{group.icon}<span>{group.title}</span><span className="ml-auto text-[11px] font-normal text-muted-foreground">{group.note}</span></div>
