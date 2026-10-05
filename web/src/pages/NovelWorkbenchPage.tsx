@@ -32,6 +32,7 @@ type Stage = {
 };
 
 const CORE_PREFIX = "xs2-novel-flywheel-";
+const MARKET_WORKFLOW = `${CORE_PREFIX}market-ranking`;
 const stages: Stage[] = [
   { id: "reference-distillation", workflowId: `${CORE_PREFIX}reference-distillation`, title: "参考资料蒸馏", eyebrow: "资料学习", description: "从参考文本提炼可迁移的叙事机制，保留证据与边界。", group: "learn", accent: "from-violet-500/30 to-fuchsia-500/10" },
   { id: "adopt-reference", workflowId: `${CORE_PREFIX}adopt-reference`, title: "采用写法", eyebrow: "资料学习", description: "从候选机制中选择本次创作真正要使用的写法。", group: "learn", accent: "from-fuchsia-500/30 to-rose-500/10" },
@@ -110,7 +111,7 @@ export default function NovelWorkbenchPage() {
     void listWorkflows().then((items) => {
       if (!active) return;
       const known = new Set(stages.map((stage) => stage.workflowId));
-      setExtensionStages(items.filter((item) => !known.has(item.workflow_id)).map((item) => ({
+      setExtensionStages(items.filter((item) => item.workflow_id !== MARKET_WORKFLOW && !known.has(item.workflow_id)).map((item) => ({
         id: item.workflow_id,
         workflowId: item.workflow_id,
         title: item.name,
