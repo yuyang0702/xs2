@@ -24,7 +24,7 @@ const defaults: Record<string, string> = {
 };
 const labels: Record<string, string> = { reference_path: "参考资料路径", window_size: "每个分析窗口的长度", premise: "故事创意", genre: "题材类型", language: "输出语言", volume_number: "目标卷号", estimated_length: "预计篇幅", words_per_chapter: "每章字数", human_intent: "本章想写什么", world_intent: "世界发生的变化（可选）", target_word_count: "目标字数", writer_type: "写手模式" };
 type TaskRef = { workflow_id: string; task_id: string };
-type Project = { index: number; values: Record<string, string>; refs: Record<string, TaskRef>; completed: string[]; selected: string[] };
+type Project = { index: number; values: Record<string, string>; refs: Record<string, TaskRef>; completed: string[]; selected: string[]; autoNext: boolean };
 type Candidate = { candidate_id: string; mechanism: string; transfer_guidance: string; constraints: string[]; evidence?: Array<{ excerpt: string }> };
 type Extension = { workflow_id: string; name: string; node_count: number };
 const terminal = ["completed", "failed", "stopped", "cancelled"];
@@ -33,10 +33,10 @@ function restore(workspace: string): Project {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey(workspace)) || "null");
     if (saved && Number.isInteger(saved.index) && saved.index >= 0 && saved.index < steps.length) {
-      return { index: saved.index, values: { ...defaults, ...saved.values }, refs: saved.refs || {}, completed: saved.completed || [], selected: saved.selected || [] };
+      return { index: saved.index, values: { ...defaults, ...saved.values }, refs: saved.refs || {}, completed: saved.completed || [], selected: saved.selected || [], autoNext: saved.autoNext === true };
     }
   } catch { /* Invalid browser draft starts at the first step. */ }
-  return { index: 0, values: { ...defaults }, refs: {}, completed: [], selected: [] };
+  return { index: 0, values: { ...defaults }, refs: {}, completed: [], selected: [], autoNext: false };
 }
 function statusLabel(status: string) {
   return ({ pending: "等待启动", running: "运行中", pre_running: "准备中", completed: "已完成", failed: "执行失败", stopped: "已停止", cancelled: "已取消" } as Record<string, string>)[status] || status;
@@ -65,6 +65,9 @@ function NovelWizard({ workspace, onWorkspaceChange }: { workspace: string; onWo
   const [preview, setPreview] = useState("");
   const requestEpoch = useRef(0);
   const launchGuard = useRef(false);
+  const autoAdvancedKey = useRef("");
+  const autoStartedKey = useRef("");
+  const autoStartIndex = useRef<number | null>(null);
   const step = steps[project.index];
   const workflowId = extensionId || PREFIX + step.id;
   const ref = extensionId ? extensionRef : project.refs[step.id];
@@ -156,6 +159,22 @@ function NovelWizard({ workspace, onWorkspaceChange }: { workspace: string; onWo
     } catch (failure) { setError(failure instanceof Error ? failure.message : "启动失败"); }
     finally { launchGuard.current = false; setLaunching(false); }
   };
+  useEffect(() => {
+    if (extensionId || !project.autoNext || !done || project.index >= steps.length - 1) return;
+    const key = `${step.id}:${ref?.task_id || ""}`;
+    if (autoAdvancedKey.current === key) return;
+    autoAdvancedKey.current = key;
+    autoStartIndex.current = project.index + 1;
+    setProject((current) => ({ ...current, index: current.index + 1, completed: [...new Set([...current.completed, step.id])] }));
+  }, [done, extensionId, project.autoNext, project.index, ref?.task_id, step.id]);
+  useEffect(() => {
+    if (extensionId || !project.autoNext || autoStartIndex.current !== project.index || project.refs[step.id] || launching || task || (step.id === "adopt-reference" && !candidateSet)) return;
+    const key = `${step.id}:${project.index}`;
+    if (autoStartedKey.current === key) return;
+    autoStartedKey.current = key;
+    autoStartIndex.current = null;
+    void launch();
+  }, [candidateSet, extensionId, launching, project.autoNext, project.index, project.refs, step.id, task]);
   const next = () => {
     if (!done || extensionId || project.index >= steps.length - 1) return;
     setProject((current) => ({ ...current, index: current.index + 1, completed: [...new Set([...current.completed, step.id])] }));
@@ -184,7 +203,7 @@ function NovelWizard({ workspace, onWorkspaceChange }: { workspace: string; onWo
       <p className="flex items-center gap-2 text-xs tracking-widest text-indigo-200"><BookOpenText className="h-4 w-4" /> XS2 小说创作</p>
       <h2 className="mt-3 text-3xl font-semibold">一步一步，写完你的故事</h2>
       <p className="mt-3 text-sm text-indigo-100/75">从参考资料开始，完成当前步骤后点击下一步。创意、写法和视角会沿用到后续创作。</p>
-      <details className="mt-4"><summary className="cursor-pointer text-xs text-indigo-200">作品工作区 · {workspace}</summary><div className="mt-3 flex gap-2"><input aria-label="作品工作区" disabled={busy} value={workspaceDraft} onChange={(event) => setWorkspaceDraft(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-white/20 bg-black/20 p-2 text-xs" /><button disabled={busy || !workspaceDraft.trim()} onClick={() => onWorkspaceChange(workspaceDraft.trim())} className="rounded-lg bg-white/10 px-3 text-xs">切换作品</button></div><p className="mt-2 text-xs text-indigo-200">每个作品目录分别保存进度。新作品从第一步开始。</p></details>
+      <details className="mt-4"><summary className="cursor-pointer text-xs text-indigo-200">作品工作区 · {workspace}</summary><div className="mt-3 flex gap-2"><input aria-label="作品工作区" disabled={busy} value={workspaceDraft} onChange={(event) => setWorkspaceDraft(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-white/20 bg-black/20 p-2 text-xs" /><button disabled={busy || !workspaceDraft.trim()} onClick={() => onWorkspaceChange(workspaceDraft.trim())} className="rounded-lg bg-white/10 px-3 text-xs">切换作品</button></div><div className="mt-3 flex items-start gap-2 text-xs text-indigo-100"><input id="novel-auto-next" type="checkbox" checked={project.autoNext} disabled={busy} onChange={(event) => setProject((current) => ({ ...current, autoNext: event.target.checked }))} className="mt-0.5" /><label htmlFor="novel-auto-next"><span className="font-medium">完成后自动执行下一步</span><span className="mt-1 block text-indigo-200">当前步骤产物验证通过后自动进入并启动下一步；需要创意或章节输入时会停下来等你填写。</span></label></div><p className="mt-2 text-xs text-indigo-200">每个作品目录分别保存进度。新作品从第一步开始。</p></details>
     </section>
     <div className="grid gap-6 lg:grid-cols-[250px_minmax(0,1fr)]">
       <aside className="space-y-4"><h3 className="text-sm font-semibold">创作进度</h3><ol className="space-y-2">{steps.map((item, index) => <li key={item.id} aria-current={!extensionId && project.index === index ? "step" : undefined} className={`flex gap-3 rounded-xl border p-3 ${project.index === index && !extensionId ? "border-primary/50 bg-primary/10" : "border-border bg-card/60"}`}><span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs ${project.completed.includes(item.id) || (index === project.index && done && !extensionId) ? "bg-emerald-400/15 text-emerald-300" : "bg-secondary text-muted-foreground"}`}>{project.completed.includes(item.id) ? <Check className="h-3 w-3" /> : index + 1}</span><div><p className="text-sm">{item.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{item.group}{project.index === index ? " · 当前步骤" : ""}</p></div></li>)}</ol>
