@@ -167,6 +167,26 @@ def test_openai_compatible_adapter_does_not_claim_vendor_specific_fields():
     }
 
 
+def test_openai_responses_adapter_omits_chat_completion_penalties():
+    request = build_provider_request(
+        "openai",
+        {
+            "temperature": 0.2,
+            "top_p": 0.5,
+            "presence_penalty": 1,
+            "reasoning_effort": "medium",
+        },
+        {"hyperparameter_values": {}},
+    )
+
+    assert request["client_kwargs"] == {
+        "temperature": 0.2,
+        "top_p": 0.5,
+        "reasoning_effort": "medium",
+    }
+    assert "presence_penalty" not in request["client_kwargs"]
+
+
 def test_create_llm_selects_native_anthropic_client(tmp_path, monkeypatch):
     config_path = tmp_path / "models_config.json"
     config_path.write_text(
@@ -256,6 +276,7 @@ def test_create_llm_uses_selected_openai_adapter_on_relay(tmp_path, monkeypatch)
 
     assert llm.use_responses_api is True
     assert llm.reasoning_effort == "medium"
+    assert llm.presence_penalty is None
     assert str(llm.root_client.base_url) == "https://relay.example.test/v1/"
 
 

@@ -107,9 +107,12 @@ def _build_qwen_params(params: dict[str, Any], _provider: dict) -> dict:
 
 
 def _build_openai_params(params: dict[str, Any], _provider: dict) -> dict:
+    # The Responses API does not accept the Chat Completions-only
+    # ``presence_penalty`` argument.  Keep the shared field in the UI for
+    # chat-completions providers, but never forward it to Responses clients.
     return {
         "client_kwargs": {
-            **_pick(params, "temperature", "top_p", "presence_penalty"),
+            **_pick(params, "temperature", "top_p"),
             "reasoning_effort": params.get("reasoning_effort", "medium"),
         },
         "extra_body": {},
