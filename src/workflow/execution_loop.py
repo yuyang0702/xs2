@@ -478,6 +478,28 @@ class WorkflowLoopMixin:
                         else str(v)
                     )
 
+                # 循环变量经常被用于文件变量的默认路径，例如
+                # ``learning/cache/{{window_id}}.json``。创建 Task 时这类
+                # 动态默认值不能提前冻结，因此在每轮注入迭代变量后重新
+                # 展开并读取文件，保证 Agent 节点拿到的是实际内容，而
+                # 不是未替换的占位符。
+                for variable in definition.variables:
+                    if not isinstance(variable, dict):
+                        continue
+                    var_key = str(variable.get("key") or "")
+                    if not var_key or variable.get("type", "text") != "file":
+                        continue
+                    default = variable.get("default")
+                    if not isinstance(default, str) or "{{" not in default:
+                        continue
+                    task.parameter_values[var_key] = default
+                    task.parameter_values[var_key] = await resolve_placeholders(
+                        default,
+                        task.parameter_values,
+                        definition.variables,
+                        str(shared_ws) if shared_ws else "",
+                    )
+
                 # active_index 存在表示从当前失败迭代恢复，此时仅重试被
                 # Manager 激活的节点；新迭代才清理上一轮瞬态。
                 if cursor.get("active_index") != idx:
