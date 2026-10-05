@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { MessageSquare, LayoutDashboard, GitBranch, Users, Layers, Settings, BookOpen, Wifi, WifiOff, FileText, Workflow, Clock, Boxes, Loader2, Store, BookOpenText, type LucideIcon } from "lucide-react";
+import { MessageSquare, LayoutDashboard, GitBranch, Users, Layers, Settings, BookOpen, Wifi, WifiOff, FileText, Workflow, Clock, Boxes, Loader2, Store, BookOpenText, Trophy, type LucideIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToastProvider } from "@/components/ui/toast-provider";
 import { CORE_PAGE_SCROLL_MODE, CORE_TAB_IDS, isCoreTabId, type CoreTabId } from "@/core-tabs";
@@ -30,6 +30,7 @@ const SystemPromptPage = lazy(() => import("./pages/SystemPromptPage"));
 const CronPage = lazy(() => import("./pages/CronPage"));
 const ExtensionsPage = lazy(() => import("./pages/ExtensionsPage"));
 const NovelWorkbenchPage = lazy(() => import("./pages/NovelWorkbenchPage"));
+const NovelMarketPage = lazy(() => import("./pages/NovelMarketPage"));
 
 /** Tab 配置：value + 图标 + 标签 + active 样式 */
 interface TabConfig {
@@ -56,6 +57,7 @@ const CORE_TAB_METADATA: Record<CoreTabId, Omit<TabConfig, "value">> = {
   settings: { icon: Settings, label: "配置", activeClass: CORE_ACTIVE_TAB_CLASS },
   extensions: { icon: Boxes, label: "插件", activeClass: CORE_ACTIVE_TAB_CLASS },
   "novel-workbench": { icon: BookOpenText, label: "小说工作台", activeClass: CORE_ACTIVE_TAB_CLASS },
+  "novel-market": { icon: Trophy, label: "市场趋势", activeClass: CORE_ACTIVE_TAB_CLASS },
 };
 
 const CORE_TAB_CONFIG: TabConfig[] = CORE_TAB_IDS.map((value) => ({
@@ -79,6 +81,7 @@ const CORE_PAGE_MAP: Record<CoreTabId, React.ComponentType> = {
   settings: SettingsPage,
   extensions: ExtensionsPage,
   "novel-workbench": NovelWorkbenchPage,
+  "novel-market": NovelMarketPage,
 };
 
 function GlobalConnectionStatus() {

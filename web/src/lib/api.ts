@@ -474,6 +474,14 @@ export async function getTask(workflowId: string, taskId: string) {
   return request<import("../types").TaskDetailResponse>(`/workflows/${workflowId}/tasks/${taskId}`);
 }
 
+export async function listWorkflows() {
+  return request<Array<{ workflow_id: string; name: string; node_count: number; version: number; status?: string }>>("/workflows");
+}
+
+export async function getWorkflow(workflowId: string) {
+  return request<{ definition: import("../types").WorkflowDefinition }>(`/workflows/${encodeURIComponent(workflowId)}`);
+}
+
 export async function readWorkflowWorkspaceFile(workflowId: string, taskId: string, path: string) {
   return request<{ workflow_id: string; task_id: string; path: string; content: string; size_bytes: number }>(
     `/workflows/${encodeURIComponent(workflowId)}/tasks/${encodeURIComponent(taskId)}/workspace-file?path=${encodeURIComponent(path)}`,

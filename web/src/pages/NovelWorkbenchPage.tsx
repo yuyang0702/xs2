@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   BookOpen,
   BookOpenText,
+  Boxes,
   Check,
   ChevronRight,
   CircleAlert,
@@ -17,19 +18,9 @@ import {
   Trophy,
   WandSparkles,
 } from "lucide-react";
-import { createTask, getTask, readWorkflowWorkspaceFile, runTask } from "../lib/api";
+import { createTask, getTask, getWorkflow, listWorkflows, readWorkflowWorkspaceFile, runTask } from "../lib/api";
 
-type StageId =
-  | "market-ranking"
-  | "reference-distillation"
-  | "adopt-reference"
-  | "build"
-  | "character"
-  | "story-plan"
-  | "outline"
-  | "mvp"
-  | "polish"
-  | "post-hoc";
+type StageId = string;
 
 type Stage = {
   id: StageId;
@@ -37,7 +28,7 @@ type Stage = {
   title: string;
   eyebrow: string;
   description: string;
-  group: "learn" | "plan" | "write";
+  group: "learn" | "plan" | "write" | "extensions";
   accent: string;
 };
 
@@ -107,7 +98,7 @@ function statusLabel(status: string) {
 }
 
 export default function NovelWorkbenchPage() {
-  const [workspace, setWorkspace] = useState("C:\\xs2\\DeterminFlow\\data\\workspaces\\xs2-novel-workbench");
+  const [workspace, setWorkspace] = useState(() => localStorage.getItem("xs2-novel-workspace") || "C:\\xs2\\DeterminFlow\\data\\workspaces\\xs2-novel-workbench");
   const [activeStageId, setActiveStageId] = useState<StageId>("market-ranking");
   const [values, setValues] = useState<Record<string, string>>(defaultValues);
   const [task, setTask] = useState<any>(null);
@@ -117,7 +108,41 @@ export default function NovelWorkbenchPage() {
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [rankingSnapshot, setRankingSnapshot] = useState<any>(null);
   const [loadingRankings, setLoadingRankings] = useState(false);
-  const activeStage = stages.find((stage) => stage.id === activeStageId) || stages[0];
+  const [extensionStages, setExtensionStages] = useState<Stage[]>([]);
+  const [dynamicFields, setDynamicFields] = useState<string[]>([]);
+  const activeStage = [...stages, ...extensionStages].find((stage) => stage.id === activeStageId) || stages[0];
+
+  useEffect(() => {
+    let active = true;
+    void listWorkflows().then((items) => {
+      if (!active) return;
+      const known = new Set(stages.map((stage) => stage.workflowId));
+      setExtensionStages(items.filter((item) => !known.has(item.workflow_id)).map((item) => ({
+        id: item.workflow_id,
+        workflowId: item.workflow_id,
+        title: item.name,
+        eyebrow: "扩展插件",
+        description: `来自插件的工作流 · ${item.node_count} 个节点`,
+        group: "extensions",
+        accent: "from-slate-500/30 to-indigo-500/10",
+      })));
+    }).catch(() => setExtensionStages([]));
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (stages.some((stage) => stage.id === activeStageId)) {
+      setDynamicFields([]);
+      return;
+    }
+    const extension = extensionStages.find((stage) => stage.id === activeStageId);
+    if (!extension) return;
+    void getWorkflow(extension.workflowId).then((result) => {
+      const fields = (result.definition.variables || []).filter((variable: any) => !variable.hidden).map((variable: any) => variable.key);
+      setDynamicFields(fields);
+      setValues((current) => ({ ...current, ...Object.fromEntries((result.definition.variables || []).map((variable: any) => [variable.key, current[variable.key] || variable.default || ""])) }));
+    }).catch(() => setDynamicFields([]));
+  }, [activeStageId, extensionStages]);
 
   const refreshTask = useCallback(async () => {
     if (!task?.workflow_id || !task?.task_id) return;
@@ -183,8 +208,8 @@ export default function NovelWorkbenchPage() {
       polish: ["chapter_number", "language"],
       "post-hoc": ["chapter_number", "language"],
     };
-    return fieldMap[activeStageId];
-  }, [activeStageId]);
+    return fieldMap[activeStageId] || dynamicFields;
+  }, [activeStageId, dynamicFields]);
 
   const launch = async () => {
     setLaunching(true);
@@ -205,7 +230,9 @@ export default function NovelWorkbenchPage() {
     { key: "learn", title: "资料学习", note: "先提炼，再选择", icon: <BookOpen className="h-4 w-4" /> },
     { key: "plan", title: "创作前置", note: "把想法变成结构", icon: <Sparkles className="h-4 w-4" /> },
     { key: "write", title: "正文生产", note: "章节、润色与后验", icon: <WandSparkles className="h-4 w-4" /> },
+    { key: "extensions", title: "扩展插件", note: "自动发现新工作流", icon: <Boxes className="h-4 w-4" /> },
   ] as const;
+  const allStages = [...stages, ...extensionStages];
 
   return (
     <div className="h-full overflow-y-auto bg-background px-5 py-6 lg:px-8">
@@ -222,7 +249,7 @@ export default function NovelWorkbenchPage() {
               <label className="mb-2 block text-xs font-medium text-indigo-100/70">当前作品工作区</label>
               <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
                 <FolderOpen className="h-4 w-4 shrink-0 text-indigo-200" />
-                <input value={workspace} onChange={(event) => setWorkspace(event.target.value)} className="min-w-0 flex-1 bg-transparent text-xs text-white outline-none" aria-label="当前作品工作区" />
+                <input value={workspace} onChange={(event) => { const next = event.target.value; setWorkspace(next); localStorage.setItem("xs2-novel-workspace", next); }} className="min-w-0 flex-1 bg-transparent text-xs text-white outline-none" aria-label="当前作品工作区" />
               </div>
               <p className="mt-2 text-[11px] text-indigo-100/50">同一本书的所有流程使用同一个目录。</p>
             </div>
@@ -236,11 +263,11 @@ export default function NovelWorkbenchPage() {
               {grouped.map((group) => (
                 <div key={group.key} className="space-y-3">
                   <div className="flex items-center gap-2 px-1 text-sm font-semibold text-foreground">{group.icon}<span>{group.title}</span><span className="ml-auto text-[11px] font-normal text-muted-foreground">{group.note}</span></div>
-                  {stages.filter((stage) => stage.group === group.key).map((stage, index) => {
+                  {allStages.filter((stage) => stage.group === group.key).map((stage, index) => {
                     const selected = stage.id === activeStageId;
                     return <button key={stage.id} type="button" onClick={() => setActiveStageId(stage.id)} className={`group w-full rounded-2xl border p-4 text-left transition ${selected ? "border-primary/60 bg-primary/10 shadow-lg shadow-primary/5" : "border-border bg-card/70 hover:border-primary/30 hover:bg-card"}`}>
                       <div className="flex items-start gap-3"><div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${stage.accent} text-foreground`}>{stageIcon(stage)}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="text-sm font-semibold text-foreground">{stage.title}</span>{selected && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">当前</span>}</div><p className="mt-1 text-xs leading-5 text-muted-foreground">{stage.description}</p></div><ChevronRight className={`mt-1 h-4 w-4 shrink-0 transition ${selected ? "text-primary" : "text-muted-foreground/50 group-hover:translate-x-0.5"}`} /></div>
-                      {index < stages.filter((item) => item.group === group.key).length - 1 && <div className="ml-4 mt-3 h-3 border-l border-dashed border-border" />}
+                      {index < allStages.filter((item) => item.group === group.key).length - 1 && <div className="ml-4 mt-3 h-3 border-l border-dashed border-border" />}
                     </button>;
                   })}
                 </div>
