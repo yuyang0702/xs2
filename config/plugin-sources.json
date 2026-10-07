@@ -23,5 +23,12 @@
       "ref": "main"
     }
   ],
-  "custom_sources": []
+  "custom_sources": [
+    {
+      "id": "custom-xs2-893834f3",
+      "name": "XS2 插件仓库",
+      "url": "https://github.com/yuyang0702/xs2-plugins.git",
+      "ref": "main"
+    }
+  ]
 }

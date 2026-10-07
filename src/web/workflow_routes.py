@@ -65,10 +65,17 @@ async def list_workspace_files(
             stat = target.stat()
         except OSError:
             continue
+        character_count = None
+        if re.fullmatch(r"story/\d{4}/chapter\.md", relative) and stat.st_size <= 2_000_000:
+            try:
+                character_count = len(re.sub(r"\s", "", target.read_text(encoding="utf-8-sig")))
+            except (OSError, UnicodeError):
+                pass
         files.append({
             "path": relative,
             "size_bytes": stat.st_size,
             "modified_at": stat.st_mtime,
+            "character_count": character_count,
         })
         if len(files) >= limit:
             break

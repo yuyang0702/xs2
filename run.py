@@ -59,6 +59,12 @@ if __name__ == "__main__":
 
     load_dotenv()
 
+    # Redirected Windows consoles otherwise use GBK, which cannot print the
+    # startup symbols and can corrupt Chinese workflow diagnostics.
+    for output_stream in (sys.stdout, sys.stderr):
+        if hasattr(output_stream, "reconfigure"):
+            output_stream.reconfigure(encoding="utf-8", errors="replace")
+
     _build_frontend_if_needed()
 
     # 日志级别唯一入口：需要诊断日志时设置 LOG_LEVEL=DEBUG

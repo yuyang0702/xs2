@@ -336,12 +336,14 @@ export async function createTask(
   workspaceOverride?: string,
   schemeId?: string,
   selectedNodeIds?: string[],
+  nodeModelOverrides?: Record<string, string>,
 ) {
   const body: Record<string, unknown> = {
     from_node_id: fromNodeId || null,
     parameter_values: parameterValues || null,
     workspace_override: workspaceOverride || null,
   };
+  if (nodeModelOverrides) body.node_model_overrides = nodeModelOverrides;
   // 优先 selected_node_ids，其次 scheme_id，最后 disabled_node_ids
   if (selectedNodeIds && selectedNodeIds.length > 0) {
     body.selected_node_ids = selectedNodeIds;
@@ -474,6 +476,90 @@ export async function getTask(workflowId: string, taskId: string) {
   return request<import("../types").TaskDetailResponse>(`/workflows/${workflowId}/tasks/${taskId}`);
 }
 
+export type NovelAssistantEntry = {
+  id: string;
+  question: string;
+  stage: string;
+  status: "running" | "completed" | "failed";
+  source: "llm";
+  reply: string;
+  message?: string;
+  attempt?: number;
+  error_code?: string;
+  model?: string;
+  created_at: string;
+  finished_at?: string;
+  elapsed_seconds?: number;
+  purpose?: "general" | "reader_repair" | "configure" | "advisor" | "plot";
+  scope?: "book" | "volume" | "chapter";
+  volume?: string;
+  plot_options?: NovelPlotOption[];
+  plot_receipts?: Record<string, { title: string; chapters: string[]; applied_at: string }>;
+  integration_projects?: string[];
+  advisor_sections?: { direction: string; hook: string; writing: string; risks: string };
+  suggestions?: { key: string; label: string; value: string; reason: string }[];
+  configuration_base?: { mode: string; values: Record<string, string>; has_story_facts?: boolean; advisor_brief?: string };
+  chapter?: string;
+  reader_summary?: string;
+  applied_at?: string;
+  feedback_path?: string;
+  applied_plan?: string;
+};
+
+export type NovelPlotChapter = {
+  chapter: string; title: string; goal: string; conflict: string; choice: string;
+  turning_point: string; cost: string; reveal: string; payoff: string; hook: string; time_advance: string;
+  setup: { source_id: string; quote: string; use: string }[];
+};
+export type NovelPlotOption = {
+  id: string; title: string; reason: string; risks: string[]; new_info: string[];
+  chapters: NovelPlotChapter[]; score: number;
+};
+export async function applyNovelPlotPlan(payload: { workflow_id: string; workspace: string; entry_id: string; option_id: string }) {
+  return request<{ title: string; chapters: string[]; applied_at: string; already_applied: boolean }>("/novel-console/plot/apply", {method:"POST", body:JSON.stringify(payload)});
+}
+export async function checkNovelContinuation(workflowId: string, workspace: string, chapter: string) {
+  return request<{ready:boolean; action:string; chapter:string; message:string}>(`/novel-console/continuation?${new URLSearchParams({workflow_id:workflowId,workspace,chapter})}`);
+}
+export async function fetchNovelArchiveState(workflowId: string, workspace: string) {
+  return request<{updated_chapter:string; message:string; stale_chapters?:string[]; pending_chapters?:string[]; items:{path:string;label:string;group:string;content:string}[]}>(`/novel-console/archive-state?${new URLSearchParams({workflow_id:workflowId,workspace})}`);
+}
+
+export async function fetchNovelAssistantHistory(workflowId: string, workspace: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace });
+  return request<{ entries: NovelAssistantEntry[] }>(`/novel-console/assistant/history?${query}`);
+}
+
+export async function askNovelAssistant(payload: {
+  workflow_id: string;
+  workspace: string;
+  request_id: string;
+  question: string;
+  project: Record<string, unknown>;
+  stage: string;
+  next_stage?: string;
+  missing?: string[];
+  candidates?: unknown[];
+  conflict_plan?: Record<string, unknown>;
+  purpose?: "general" | "reader_repair" | "configure" | "advisor" | "plot";
+  chapter?: string;
+  scope?: "book" | "volume" | "chapter";
+}) {
+  return request<{ success: boolean; entry: NovelAssistantEntry }>("/novel-console/assistant", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function applyNovelRepairPlan(payload: { workflow_id: string; workspace: string; entry_id: string; plan: string }) {
+  return request<{ feedback_path: string; chapter: string; already_applied: boolean; model_id: string }>("/novel-console/repair/apply", {method: "POST", body: JSON.stringify(payload)});
+}
+
+export async function getNovelReaderReport(workflowId: string, workspace: string, chapter: string) {
+  const query = new URLSearchParams({workflow_id: workflowId, workspace, chapter});
+  return request<{report: Record<string, unknown>; chapter: string}>(`/novel-console/reader-report?${query}`);
+}
+
 export async function listWorkflows() {
   return request<Array<{ workflow_id: string; name: string; node_count: number; version: number; status?: string }>>("/workflows");
 }
@@ -507,6 +593,94 @@ export async function readWorkflowWorkspaceFile(workflowId: string, taskId: stri
   return request<{ workflow_id: string; task_id: string; path: string; content: string; size_bytes: number }>(
     `/workflows/${encodeURIComponent(workflowId)}/tasks/${encodeURIComponent(taskId)}/workspace-file?path=${encodeURIComponent(path)}`,
   );
+}
+
+export async function writeNovelWorkspaceText(workflowId: string, workspace: string, path: string, content: string) {
+  return request<{ success: boolean; path: string; sha256: string }>("/novel-console/text", {
+    method: "PUT",
+    body: JSON.stringify({ workflow_id: workflowId, workspace, path, content }),
+  });
+}
+
+export type PublicChapterLink = { index: number; title: string; url: string; selected?: boolean };
+
+export async function inspectNovelImportUrl(url: string) {
+  return request<{ url: string; title: string; detected_type: string; chapters: PublicChapterLink[]; has_page_text: boolean; warnings?: string[] }>("/novel-console/import-url/inspect", {
+    method: "POST", body: JSON.stringify({ url }),
+  });
+}
+
+export async function importNovelUrl(payload: { workflow_id: string; workspace: string; url: string; source_mode: string; chapters: PublicChapterLink[] }) {
+  return request<{ success: boolean; path: string; manifest_path: string; title: string; chapter_count: number; characters: number; warnings?: string[] }>("/novel-console/import-url/fetch", {
+    method: "POST", body: JSON.stringify(payload),
+  });
+}
+
+export async function saveNovelProject(workflow_id: string, workspace: string, state: object) {
+  return request<{ success: boolean; workspace: string; revision: number }>("/novel-console/projects", { method: "PUT", body: JSON.stringify({ workflow_id, workspace, state }) });
+}
+
+export async function listNovelProjects() {
+  return request<{ projects: Array<{ workspace: string; state: Record<string, unknown>; progress?: NovelProgress }> }>("/novel-console/projects");
+}
+
+export async function deleteNovelProject(workflowId: string, workspace: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace });
+  return request<{ success: boolean; workspace: string; deleted: boolean }>(`/novel-console/projects?${query.toString()}`, {
+    method: "DELETE",
+  });
+}
+
+export type WritingLibraryItem = {
+  id: string; name: string; genres: string[]; pov: string[]; tone: string[];
+  language: string; candidate_count: number; source_sha256?: string; source_mode?: string; created_at: string; version: number;
+};
+
+export async function listWritingLibrary() {
+  return request<{ items: WritingLibraryItem[] }>("/novel-console/library");
+}
+
+export async function getWritingLibraryItem(id: string) {
+  return request<{ manifest: WritingLibraryItem; profile: { markdown?: string; documents?: Record<string, string>; limitations?: string[]; upstream?: { repository?: string; commit?: string } }; candidates: { candidates: Array<Record<string, unknown>>; candidates_sha256?: string; style_choices?: ReferenceChoice[]; conflict_choices?: ReferenceChoice[]; conflict_patterns?: Array<Record<string, unknown>> } }>(
+    `/novel-console/library/${encodeURIComponent(id)}`,
+  );
+}
+
+export type ReferenceChoice = {choice_id: string; title: string; kind: "style" | "conflict"; transfer_guidance: string; requires_adaptation: boolean; [key: string]: unknown};
+export type WritingLibraryUsage = { status: "available" | "attached" | "adopted"; selected_count: number; style_count?: number; conflict_count?: number; selected_candidate_ids?: string[]; selected_style_ids?: string[]; selected_conflict_ids?: string[]; update_available?: boolean; error?: string };
+export async function getWritingLibraryUsage(workflowId: string, workspace: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace });
+  return request<{ items: Record<string, WritingLibraryUsage> }>(`/novel-console/library-usage?${query}`);
+}
+
+export async function getNovelAdoptedWriting(workflowId: string, workspace: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace });
+  return request<{ version: number; selected_candidate_ids: string[]; selected_style_ids: string[]; selected_conflict_ids: string[]; styles: Array<{choice_id: string; title: string; guidance: string}>; conflicts: Array<{choice_id: string; title: string; guidance: string}>; mechanisms: Array<{candidate_id: string; mechanism: string}> }>(`/novel-console/adopted-writing?${query}`);
+}
+
+export async function getNovelReferenceCandidates(workflowId: string, workspace: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace });
+  return request<{candidates: Array<Record<string, unknown>>; candidates_sha256?: string; style_choices: ReferenceChoice[]; conflict_choices: ReferenceChoice[]; reference_choices_sha256: string}>(`/novel-console/reference-candidates?${query}`);
+}
+
+export async function publishWritingLibrary(payload: {
+  workflow_id: string; workspace: string; name: string; genres?: string[]; pov?: string[]; tone?: string[]; language?: string;
+}) {
+  return request<{ item: WritingLibraryItem }>("/novel-console/library/publish", {
+    method: "POST", body: JSON.stringify(payload),
+  });
+}
+
+export async function attachWritingLibrary(payload: { workflow_id: string; workspace: string; library_id: string; refresh?: boolean }) {
+  return request<{ library_id: string; already_attached?: boolean; usage?: WritingLibraryUsage; candidates: { candidates: Array<Record<string, unknown>>; candidates_sha256?: string } }>("/novel-console/library/attach", {
+    method: "POST", body: JSON.stringify(payload),
+  });
+}
+
+export type NovelProgress = { percent: number; completed_count: number; total_count: number; label: string; chapter_count: number; can_download: boolean; export_current: boolean; reader_verdict: string };
+export async function getNovelProgress(workflowId: string, workspace: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace });
+  return request<NovelProgress>(`/novel-console/progress?${query}`);
 }
 
 export async function stopTask(workflowId: string, taskId: string) {

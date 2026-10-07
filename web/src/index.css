@@ -256,6 +256,36 @@
 }
 
 /* Accessibility: reduced motion */
+.novel-reading .markdown-body {
+  line-height: 1.9;
+}
+
+.novel-reading .markdown-body ul { list-style: disc; }
+.novel-reading .markdown-body ol { list-style: decimal; }
+.novel-reading .markdown-body h4,
+.novel-reading .markdown-body h5,
+.novel-reading .markdown-body h6 {
+  margin: 1.5rem 0 0.6rem;
+  font-weight: 600;
+}
+.novel-reading .markdown-body table {
+  width: 100%;
+  white-space: normal;
+  font-size: 0.875rem;
+}
+.novel-reading .markdown-body td {
+  min-width: 8rem;
+  max-width: 32rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.85;
+  vertical-align: top;
+}
+.novel-reading .markdown-body th {
+  white-space: nowrap;
+  vertical-align: top;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

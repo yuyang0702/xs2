@@ -219,6 +219,14 @@ class WorkflowEngine(WorkflowFlowMixin, WorkflowLoopMixin):
         # 获取执行计划（串行或带并行标记）
         execution_plan = definition.get_execution_plan()
 
+        # A task started at a downstream node must retain that boundary when
+        # an automatic retry resumes it. Otherwise previously excluded nodes
+        # are still pending and get executed from the beginning on retry.
+        if from_node_id:
+            task.control_flow_state["_execution_start_node_id"] = from_node_id
+        else:
+            from_node_id = task.control_flow_state.get("_execution_start_node_id")
+
         try:
             # 如果指定了 from_node_id，跳过之前已执行的步骤
             plan_index = 0

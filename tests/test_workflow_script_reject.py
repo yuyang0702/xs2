@@ -174,6 +174,28 @@ def test_script_node_reject_protocol_calls_callback(tmp_path, monkeypatch):
     assert calls == [("script:script_validate", "plot_point 不能为空", "agent_l1")]
 
 
+def test_python_script_preserves_chinese_workflow_variables(tmp_path, monkeypatch):
+    workflow_id = "wf-chinese-variable"
+    script_dir = tmp_path / "workflows" / workflow_id / "script"
+    script_dir.mkdir(parents=True)
+    (script_dir / "names.py").write_text(
+        "print('<WF_VAR>character_names:[\"周砺川\",\"许知微\"]</WF_VAR>')\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(config, "WORKFLOWS_DIR", tmp_path / "workflows")
+    monkeypatch.setenv("PYTHONIOENCODING", "gbk")
+    node = WorkflowNode(id="names", node_type="script", node_params={"script_type": "python", "script_name": "names"})
+    ctx = NodeContext(definition=WorkflowDef(workflow_id=workflow_id), node_def=node,
+                      node_state=NodeExecutionState(node_id=node.id), shared_ws=workspace,
+                      workflow_id=workflow_id, task_id="task-test")
+    result = asyncio.run(ScriptNode().execute(ctx))
+    assert result.status == "success"
+    assert json.loads(result.outputs["character_names"]) == ["周砺川", "许知微"]
+    assert "\ufffd" not in result.stdout
+
+
 def test_script_node_reject_protocol_requires_opt_in(tmp_path, monkeypatch):
     workflow_id = "wf-test-script-reject-disabled"
     script_dir = tmp_path / "workflows" / workflow_id / "script"

@@ -499,6 +499,11 @@ class ScriptNode(BaseNodePlugin):
         env["SCRIPT_DIR"] = str(script_file.parent)
         env["WORKSPACE_DIR"] = working_dir
         env.update(script_environment)
+        if script_type == "python":
+            # Workflow output tags are decoded as UTF-8 below. Windows pipes
+            # otherwise use the locale encoding and corrupt Chinese variables.
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
 
         logger.info(
             f"执行脚本: {script_file} (type={script_type}, timeout={timeout}s, "
