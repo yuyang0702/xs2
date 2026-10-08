@@ -258,7 +258,7 @@ class NovelAssistantJobs:
                     await asyncio.sleep(TRANSIENT_RETRY_DELAYS_SECONDS[attempt - 1])
                 # Resolve current model settings for each attempt rather than
                 # holding a startup client with stale provider credentials.
-                llm = create_llm(streaming=True, timeout=ANALYSIS_TIMEOUT_SECONDS,
+                llm = create_llm(model_override=payload.get('_model_override'), streaming=True, timeout=ANALYSIS_TIMEOUT_SECONDS,
                                  provider_retries_enabled=False)
                 try:
                     def on_output():
@@ -286,7 +286,7 @@ class NovelAssistantJobs:
             if not reply:
                 result = {"status": "failed", "error_code": "empty_output", "message": "模型没有返回可用回答，请重试。"}
             else:
-                result = {"status": "completed", "reply": reply, "message": "分析已完成，可查看建议。", "model": str(getattr(llm, "model_name", "") or getattr(llm, "model", ""))}
+                result = {"status": "completed", "reply": reply, "message": "分析已完成，可查看建议。", "model": payload.get('_model_override') or str(getattr(llm, "model_name", "") or getattr(llm, "model", ""))}
                 if support and shared and payload.get('purpose', 'general') in {'general', 'plot'}:
                     try:
                         answer, options = support.parse_proposal(reply, shared, payload['question'], payload.get('project', {}).get('mode', 'serial'))

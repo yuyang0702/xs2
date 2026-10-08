@@ -31,6 +31,7 @@ from .novel_reference_choices import with_reference_choices
 from .novel_progress import progress
 from .novel_repair import repair_context, prepare_repair, ensure_idle
 from .novel_story_support import story_support
+from .novel_workflow_models import novel_definition, model_settings, save_model_settings
 
 router = APIRouter(prefix="/api/novel-console", tags=["novel-console"])
 _lock = threading.RLock()
@@ -38,6 +39,28 @@ _index = DATA_DIR / "novel-console" / "workspaces.json"
 _manifest = ".novel-project.json"
 _library_root = DATA_DIR / "writing-library"
 _FANQIE_HOSTS = {"fanqienovel.com", "www.fanqienovel.com"}
+
+
+class NovelModelSave(BaseModel):
+    workflow_id: str
+    expected_digest: str = Field(min_length=64, max_length=64)
+    node_models: dict[str, str]
+
+
+@router.get("/workflow-models")
+def novel_workflow_models(workflow_id: str, request: Request):
+    from src.core.model_manager import get_model_manager
+    return model_settings(novel_definition(_get_manager(request), workflow_id), get_model_manager())
+
+
+@router.patch("/workflow-models")
+def update_novel_workflow_models(payload: NovelModelSave, request: Request):
+    from src.core.model_manager import get_model_manager
+    _ensure_http_mutation_allowed(request, payload.workflow_id)
+    manager = _ensure_workflow_writable(request, payload.workflow_id)
+    with _lock:
+        return save_model_settings(manager, payload.workflow_id, payload.expected_digest,
+                                   payload.node_models, get_model_manager())
 
 
 class _PublicPageParser(HTMLParser):
@@ -685,6 +708,13 @@ async def novel_assistant(payload: NovelAssistantRequest, request: Request):
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
     data = payload.model_dump(mode="json")
+    if payload.purpose == 'advisor':
+        from src.core.model_manager import get_model_manager
+        settings = model_settings(novel_definition(mgr, "xs2-novel-flywheel-novel-advisor"), get_model_manager())
+        nodes = settings['nodes']
+        if len(nodes) != 1 or not nodes[0]['available']:
+            raise HTTPException(409, "小说顾问尚未配置可用模型，请在当前步骤的模型设置中选择。")
+        data['_model_override'] = nodes[0]['effective_model']
     if payload.purpose == 'reader_repair':
         try:
             data['_repair_context'] = repair_context(root, payload.chapter, DATA_DIR / 'workflows')

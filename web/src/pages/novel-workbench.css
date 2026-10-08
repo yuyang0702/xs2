@@ -1,0 +1,70 @@
+/* Every rule is scoped to the novel workbench. App tabs and other pages keep
+   their existing theme. Native reading dialogs inherit the same variables. */
+.novel-workbench {
+  --background: 234 28% 8%; --foreground: 229 24% 91%;
+  --card: 234 25% 12%; --card-foreground: 229 24% 91%;
+  --popover: 234 25% 12%; --popover-foreground: 229 24% 91%;
+  --primary: 265 89% 73%; --primary-foreground: 247 32% 9%;
+  --secondary: 236 24% 17%; --secondary-foreground: 229 24% 91%;
+  --muted: 236 24% 17%; --muted-foreground: 232 17% 68%;
+  --accent: 236 24% 19%; --accent-foreground: 229 24% 91%;
+  --border: 237 20% 24%; --input: 237 20% 31%; --ring: 265 89% 73%;
+  --destructive: 0 84% 73%; --success: 101 71% 66%;
+  --novel-lime: 101 71% 66%; color-scheme: dark;
+}
+.novel-workbench[data-novel-theme="quiet"] { --primary: 232 75% 75%; --ring: 232 75% 75%; --novel-lime: 156 53% 65%; }
+.novel-workbench[data-novel-theme="paper"] {
+  --background: 40 25% 95%; --foreground: 232 19% 20%;
+  --card: 40 33% 98%; --card-foreground: 232 19% 20%;
+  --popover: 40 33% 98%; --popover-foreground: 232 19% 20%;
+  --primary: 262 49% 47%; --primary-foreground: 0 0% 100%;
+  --secondary: 40 18% 90%; --secondary-foreground: 232 19% 20%;
+  --muted: 40 18% 90%; --muted-foreground: 230 10% 42%;
+  --accent: 40 18% 88%; --accent-foreground: 232 19% 20%;
+  --border: 40 14% 79%; --input: 40 14% 68%; --ring: 262 49% 47%;
+  --destructive: 0 63% 42%; --novel-lime: 132 47% 34%; color-scheme: light;
+}
+.novel-workbench .novel-sidebar { position: relative; isolation: isolate; background: hsl(var(--card)); }
+.novel-workbench .novel-sidebar::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(hsl(var(--primary)), transparent 45%, hsl(var(--novel-lime) / .6)); pointer-events: none; }
+.novel-workbench .novel-sidebar nav { position: relative; z-index: 1; }
+.novel-workbench .novel-nav-item { border: 1px solid transparent; min-height: 44px; }
+.novel-workbench .novel-nav-item[aria-current="page"] { border-color: hsl(var(--primary) / .24); box-shadow: inset 3px 0 hsl(var(--novel-lime)); background: hsl(var(--primary) / .11); }
+.novel-workbench .novel-unit-motif { margin: auto 0 18px; display: grid; justify-items: center; gap: 8px; opacity: .6; pointer-events: none; }
+.novel-workbench .novel-unit-motif svg { width: 98px; height: 125px; stroke: hsl(var(--primary) / .45); stroke-width: 1.1; }
+.novel-workbench .novel-motif-accent { stroke: hsl(var(--novel-lime)); stroke-width: 2; }
+.novel-workbench .novel-unit-motif span { font-size: 9px; letter-spacing: .3em; color: hsl(var(--muted-foreground)); }
+.novel-workbench:not([data-novel-theme="eva"]) .novel-unit-motif { display: none; }
+.novel-workbench .novel-step-card { position: relative; border-top: 2px solid hsl(var(--primary) / .6); }
+.novel-workbench .novel-step-card[data-state="running"] { border-top-color: hsl(var(--novel-lime)); }
+.novel-workbench .novel-step-card[data-state="failed"] { border-top-color: hsl(var(--destructive)); }
+.novel-workbench .novel-step-card[data-state="completed"] { border-top-color: hsl(var(--novel-lime) / .5); }
+.novel-workbench .novel-step-card[data-state="running"]::before { content: ""; position: absolute; top: -2px; left: 0; width: 18%; height: 2px; background: hsl(var(--novel-lime)); box-shadow: 0 0 9px hsl(var(--novel-lime) / .5); pointer-events: none; }
+.novel-workbench[data-motion="full"] .novel-step-card[data-state="running"]::before { animation: novel-task-tracer 3.2s ease-in-out infinite alternate; }
+.novel-workbench .novel-task-feedback[data-state="completed"] { color: hsl(var(--novel-lime)); border-color: hsl(var(--novel-lime) / .22); background: hsl(var(--novel-lime) / .045); }
+.novel-workbench .novel-task-feedback[data-state="failed"] { color: hsl(var(--destructive)); border-color: hsl(var(--destructive) / .3); background: hsl(var(--destructive) / .06); }
+.novel-workbench[data-motion="light"] .novel-task-feedback[data-state="completed"],
+.novel-workbench[data-motion="full"] .novel-task-feedback[data-state="completed"] { animation: novel-completed .65s ease-out 1; }
+.novel-workbench .novel-content { overflow-anchor: none; }
+.novel-workbench .novel-assistant-drawer { max-height: calc(100dvh - 90px); border: 1px solid hsl(var(--primary) / .3); border-radius: 16px 0 0 16px; }
+.novel-workbench .novel-assistant-drawer header { position: sticky; top: -20px; z-index: 2; background: hsl(var(--background)); padding: 12px 0; }
+.novel-workbench .novel-display-settings summary::-webkit-details-marker { display: none; }
+.novel-workbench button:active:not(:disabled) { transform: translateY(1px); }
+.novel-workbench :is(button, summary, select, input, textarea):focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 3px; }
+.novel-workbench :is(button, input, textarea, select):disabled { cursor: not-allowed; }
+.novel-workbench :is(main, dialog, .novel-reading-scroll) { scrollbar-width: thin; scrollbar-color: hsl(var(--primary) / .35) transparent; }
+.novel-workbench .novel-reading-dialog { width: min(1180px, 96vw); height: 94dvh; }
+.novel-workbench .novel-reading-column { max-width: var(--novel-reading-width); }
+.novel-workbench .novel-reading-column :is(p, li, dd, blockquote) { font-size: var(--novel-font-size); line-height: var(--novel-line-height); }
+.novel-workbench .novel-reading-column p { margin-block: 1.05em; }
+.novel-workbench .novel-reading-column :is(h1, h2, h3, h4) { line-height: 1.5; letter-spacing: .015em; }
+.novel-workbench .novel-reading-column :is(h2, h3) { margin-top: 1.8em; }
+.novel-workbench .novel-reading-column :is(code, pre) { font-size: .85em; }
+.novel-workbench[data-novel-theme="paper"] :is(.text-emerald-300, .text-emerald-400) { color: #28713d; }
+.novel-workbench[data-novel-theme="paper"] :is(.text-amber-300, .text-amber-400) { color: #94611a; }
+.novel-workbench[data-novel-theme="paper"] :is(.text-sky-300, .text-sky-400, .text-cyan-300) { color: #206185; }
+.novel-workbench[data-novel-theme="paper"] :is(.text-violet-300, .text-violet-400) { color: #7748a9; }
+.novel-workbench[data-motion="off"] *, .novel-workbench[data-motion="off"] *::before, .novel-workbench[data-motion="off"] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+@media (prefers-reduced-motion: reduce) { .novel-workbench *, .novel-workbench *::before, .novel-workbench *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+@media (max-width: 640px) { .novel-workbench .novel-assistant-drawer { top: 72px; right: 8px; bottom: 8px; width: calc(100vw - 16px); border-radius: 16px; } .novel-workbench .novel-reading-dialog { height: 96dvh; } }
+@keyframes novel-task-tracer { to { left: 82%; } }
+@keyframes novel-completed { from { box-shadow: 0 0 0 3px hsl(var(--novel-lime) / .16); } to { box-shadow: 0 0 0 0 transparent; } }
