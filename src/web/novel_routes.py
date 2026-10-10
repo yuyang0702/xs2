@@ -29,7 +29,8 @@ from .novel_assistant import NovelAssistantJobs
 from .novel_library import adopted_writing, enrich_candidates, fingerprint, profile_from_workspace, usage
 from .novel_reference_choices import with_reference_choices
 from .novel_progress import progress
-from .novel_repair import repair_context, prepare_repair, ensure_idle
+from .novel_repair import repair_context, prepare_repair, ensure_idle, preserve_legacy_report
+from .novel_chapters import chapter_context, chapter_removal_preview, remove_chapter
 from .novel_story_support import story_support
 from .novel_workflow_models import novel_definition, model_settings, save_model_settings
 
@@ -476,16 +477,17 @@ async def import_url(payload: UrlImport, request: Request):
 @router.get("/library")
 async def list_writing_library():
     """列出跨作品可复用的写法蒸馏结果。"""
-    _library_root.mkdir(parents=True, exist_ok=True)
-    items = []
-    for folder in sorted(_library_root.iterdir(), key=lambda item: item.name) if _library_root.exists() else []:
-        if not folder.is_dir():
-            continue
-        manifest = read_json_file(folder / "manifest.json", {})
-        if not isinstance(manifest, dict):
-            continue
-        choices = with_reference_choices(read_json_file(folder / "candidates.json", {}))
-        items.append({**manifest, "style_count": len(choices["style_choices"]), "conflict_count": len(choices["conflict_choices"])})
+    with _lock:
+        _library_root.mkdir(parents=True, exist_ok=True)
+        items = []
+        for folder in sorted(_library_root.iterdir(), key=lambda item: item.name):
+            if not folder.is_dir():
+                continue
+            manifest = read_json_file(folder / "manifest.json", {})
+            if not isinstance(manifest, dict) or not manifest.get("id"):
+                continue
+            choices = with_reference_choices(read_json_file(folder / "candidates.json", {}))
+            items.append({**manifest, "style_count": len(choices["style_choices"]), "conflict_count": len(choices["conflict_choices"])})
     return {"items": items}
 
 
@@ -552,6 +554,69 @@ class LibraryPublish(BaseModel):
     pov: list[str] = Field(default_factory=list, max_length=4)
     tone: list[str] = Field(default_factory=list, max_length=16)
     language: str = "中文"
+    automatic: bool = False
+    task_id: str = Field(default="", max_length=80)
+
+
+def library_source_key(candidates: object) -> str:
+    source = candidates.get("source", {}) if isinstance(candidates, dict) else {}
+    source_hash = source.get("text_sha256") if isinstance(source, dict) else None
+    if isinstance(source_hash, str) and source_hash:
+        return "source:" + source_hash
+    normalized = with_reference_choices(candidates) if isinstance(candidates, dict) else candidates
+    return "content:" + fingerprint(normalized)
+
+
+class LibraryDelete(BaseModel):
+    workflow_id: str
+    library_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+@router.post("/library/delete")
+def delete_writing_library(payload: LibraryDelete, request: Request):
+    """Delete shared entries only; books own independent candidate/blueprint copies."""
+    _ensure_http_mutation_allowed(request, payload.workflow_id)
+    _ensure_workflow_writable(request, payload.workflow_id)
+    deleted, missing, failed = [], [], []
+    with _lock:
+        root = _library_root.resolve()
+        targets = []
+        # Validate the entire batch before any recursive deletion. Do not sanitize
+        # a destructive target into the name of an unrelated real entry.
+        for item_id in dict.fromkeys(payload.library_ids):
+            if not re.fullmatch(r"[a-z0-9_-]{1,80}", item_id):
+                raise HTTPException(400, "写法库条目编号无效，请刷新后重新选择")
+            folder = root / item_id
+            resolved = folder.resolve()
+            if resolved == root or not resolved.is_relative_to(root) or resolved != folder:
+                raise HTTPException(403, "写法库路径无效，不能删除链接或库外目录")
+            if not folder.exists():
+                missing.append(item_id)
+                continue
+            manifest = read_json_file(folder / "manifest.json", None)
+            if not folder.is_dir() or not isinstance(manifest, dict) or manifest.get("id") != item_id:
+                raise HTTPException(409, "所选目录不是有效的写法库条目，请刷新后重新选择")
+            targets.append((item_id, folder))
+
+        markers_path = root / ".deleted-sources.json"
+        markers = read_json_file(markers_path, None) if markers_path.exists() else {}
+        if not isinstance(markers, dict):
+            raise HTTPException(409, "写法删除记录格式异常，请先修复记录")
+        # Keep only a source key and deletion time, not another copy of the entry.
+        # Old completed tasks must not recreate an intentionally deleted result.
+        deleted_at = datetime.now(timezone.utc).isoformat()
+        for _, folder in targets:
+            candidates = read_json_file(folder / "candidates.json", {})
+            markers[library_source_key(candidates)] = deleted_at
+        if targets:
+            atomic_json(markers_path, markers)
+        for item_id, folder in targets:
+            try:
+                shutil.rmtree(folder)
+                deleted.append(item_id)
+            except OSError:
+                failed.append({"id": item_id, "message": "文件正在使用或没有删除权限，请稍后重试"})
+    return {"success": not failed, "deleted_ids": deleted, "missing_ids": missing, "failed": failed}
 
 
 @router.post("/library/publish")
@@ -572,6 +637,29 @@ async def publish_writing_library(payload: LibraryPublish, request: Request):
     if new_profile.get("source_sha256") and new_profile["source_sha256"] != source_sha256:
         raise HTTPException(400, "风格分析与候选来源不一致，请完成本次蒸馏后再保存")
     with _lock:
+        if payload.automatic:
+            task_data = mgr.get_task(payload.workflow_id, payload.task_id) if payload.task_id else None
+            task = task_data if isinstance(task_data, dict) else {}
+            if task.get("status") != "completed":
+                raise HTTPException(409, "自动登记需要已完成的蒸馏任务")
+            task_root = mgr._ws_manager.resolve_workflow_workspace(
+                payload.workflow_id, override=task.get("workspace_override"),
+            ).resolve()
+            if task_root != root:
+                raise HTTPException(409, "自动登记的任务与当前资料工作区不一致")
+            markers_path = _library_root / ".deleted-sources.json"
+            markers = read_json_file(markers_path, None) if markers_path.exists() else {}
+            if not isinstance(markers, dict):
+                raise HTTPException(409, "写法删除记录格式异常，请先修复记录")
+            deleted_at = markers.get(library_source_key(candidates))
+            if deleted_at:
+                try:
+                    completed_time = datetime.fromisoformat(task["completed_at"])
+                    deleted_time = datetime.fromisoformat(deleted_at)
+                    if completed_time <= deleted_time:
+                        return {"item": None, "removed": True}
+                except (KeyError, TypeError, ValueError):
+                    raise HTTPException(409, "无法核对蒸馏时间，请使用手动保存")
         existing_folder = None
         for item in _library_root.iterdir() if _library_root.exists() else []:
             manifest = read_json_file(item / "manifest.json", {}) if item.is_dir() else {}
@@ -636,6 +724,8 @@ async def attach_writing_library(payload: LibraryAttach, request: Request):
         raise HTTPException(400, "写法库候选格式无效")
     candidates = with_reference_choices(candidates)
     with _lock:
+        if not (folder / "manifest.json").is_file():
+            raise HTTPException(404, "这份写法已被删除，请刷新写法库后重新选择")
         current_usage = usage(root, folder)
         if current_usage["status"] != "available" and not (payload.refresh and current_usage.get("update_available")):
             return {"library_id": payload.library_id, "candidates": candidates,
@@ -762,6 +852,38 @@ async def continuation_check(request: Request, workflow_id: str, workspace: str,
         raise HTTPException(409, str(error)) from error
 
 
+@router.get('/chapters/context')
+async def novel_chapter_context(request: Request, workflow_id: str, workspace: str,
+                                chapter: str, action: Literal['write', 'repair', 'assess', 'audit'] = 'write'):
+    mgr = _get_manager(request)
+    root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
+    try:
+        return chapter_context(root, DATA_DIR / 'workflows', chapter, action)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+
+
+class ChapterOpen(BaseModel):
+    workflow_id: str
+    workspace: str
+    chapter: str = Field(pattern=r'^[0-9]{4}$')
+    action: Literal['write', 'repair', 'assess', 'audit'] = 'write'
+
+
+@router.post('/chapters/context')
+async def open_novel_chapter(payload: ChapterOpen, request: Request):
+    _ensure_http_mutation_allowed(request, payload.workflow_id)
+    mgr = _ensure_workflow_writable(request, payload.workflow_id)
+    root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
+    with _lock:
+        try:
+            result = chapter_context(root, DATA_DIR / 'workflows', payload.chapter, payload.action)
+            preserve_legacy_report(root, DATA_DIR / 'workflows')
+            return result
+        except (ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(409, str(error)) from error
+
+
 @router.get('/archive-state')
 async def novel_archive_state(request: Request, workflow_id: str, workspace: str):
     mgr = _get_manager(request)
@@ -785,6 +907,39 @@ async def novel_archive_state(request: Request, workflow_id: str, workspace: str
     return {**status, 'items': items}
 
 
+@router.get('/chapters/removal-preview')
+async def preview_chapter_removal(request: Request, workflow_id: str, workspace: str, chapter: str):
+    mgr = _get_manager(request)
+    root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
+    try:
+        return chapter_removal_preview(root, DATA_DIR / 'workflows', chapter)
+    except (ValueError, OSError) as error:
+        raise HTTPException(409, str(error)) from error
+
+
+class ChapterRemoval(BaseModel):
+    workflow_id: str
+    workspace: str
+    chapter: str = Field(pattern=r'^[0-9]{4}$')
+    operation: Literal['delete', 'regenerate']
+    expected_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    expected_revision: int = Field(ge=0)
+
+
+@router.post('/chapters/remove')
+async def remove_novel_chapter(payload: ChapterRemoval, request: Request):
+    _ensure_http_mutation_allowed(request, payload.workflow_id)
+    mgr = _ensure_workflow_writable(request, payload.workflow_id)
+    root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
+    with _lock:
+        try:
+            return remove_chapter(root, DATA_DIR / 'workflows', payload.chapter, payload.operation,
+                                  payload.expected_sha256, payload.expected_revision,
+                                  story_support(required=True), atomic_json)
+        except (ValueError, OSError, json.JSONDecodeError) as error:
+            raise HTTPException(409, str(error)) from error
+
+
 class RepairApply(BaseModel):
     workflow_id: str
     workspace: str
@@ -797,7 +952,7 @@ async def chapter_reader_report(request: Request, workflow_id: str, workspace: s
     mgr = _get_manager(request)
     root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
     try:
-        context = repair_context(root, chapter, DATA_DIR / 'workflows')
+        context = repair_context(root, chapter, DATA_DIR / 'workflows', require_idle=False)
     except (ValueError, json.JSONDecodeError) as error:
         raise HTTPException(409, str(error)) from error
     return {'report': context['report'], 'chapter': chapter}

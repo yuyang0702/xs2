@@ -519,7 +519,30 @@ export async function applyNovelPlotPlan(payload: { workflow_id: string; workspa
   return request<{ title: string; chapters: string[]; applied_at: string; already_applied: boolean }>("/novel-console/plot/apply", {method:"POST", body:JSON.stringify(payload)});
 }
 export async function checkNovelContinuation(workflowId: string, workspace: string, chapter: string) {
-  return request<{ready:boolean; action:string; chapter:string; message:string}>(`/novel-console/continuation?${new URLSearchParams({workflow_id:workflowId,workspace,chapter})}`);
+  return request<{ready:boolean; action:string; chapter:string; message:string; next_step?:string; reason_code?:string; changed_sources?:string[]}>(`/novel-console/continuation?${new URLSearchParams({workflow_id:workflowId,workspace,chapter})}`);
+}
+export type NovelChapterContext = {
+  chapter: string; has_body: boolean;
+  refs: Record<string, {workflow_id: string; task_id: string}>;
+  completed: string[]; values: Record<string, string>; later_chapters: string[]; message: string;
+};
+export async function getNovelChapterContext(workflowId: string, workspace: string, chapter: string, action = "write") {
+  return request<NovelChapterContext>("/novel-console/chapters/context", {method:"POST",
+    body:JSON.stringify({workflow_id:workflowId, workspace, chapter, action})});
+}
+export type NovelChapterRemovalPreview = {
+  chapter: string; body_sha256: string; revision: number; later_chapters: string[];
+  file_count: number; message: string;
+};
+export async function previewNovelChapterRemoval(workflowId: string, workspace: string, chapter: string) {
+  return request<NovelChapterRemovalPreview>(`/novel-console/chapters/removal-preview?${new URLSearchParams({workflow_id:workflowId,workspace,chapter})}`);
+}
+export async function removeNovelChapter(payload: {
+  workflow_id:string; workspace:string; chapter:string; operation:"delete"|"regenerate";
+  expected_sha256:string; expected_revision:number;
+}) {
+  return request<NovelChapterRemovalPreview & {backup_path:string; state:Record<string, unknown>}>(
+    "/novel-console/chapters/remove", {method:"POST",body:JSON.stringify(payload)});
 }
 export async function fetchNovelArchiveState(workflowId: string, workspace: string) {
   return request<{updated_chapter:string; message:string; stale_chapters?:string[]; pending_chapters?:string[]; items:{path:string;label:string;group:string;content:string}[]}>(`/novel-console/archive-state?${new URLSearchParams({workflow_id:workflowId,workspace})}`);
@@ -634,10 +657,24 @@ export async function deleteNovelProject(workflowId: string, workspace: string) 
 export type WritingLibraryItem = {
   id: string; name: string; genres: string[]; pov: string[]; tone: string[];
   language: string; candidate_count: number; source_sha256?: string; source_mode?: string; created_at: string; version: number;
+  style_count?: number; conflict_count?: number;
 };
 
 export async function listWritingLibrary() {
   return request<{ items: WritingLibraryItem[] }>("/novel-console/library");
+}
+
+export type WritingLibraryDeleteResult = {
+  success: boolean;
+  deleted_ids: string[];
+  missing_ids: string[];
+  failed: Array<{ id: string; message: string }>;
+};
+
+export async function deleteWritingLibrary(workflowId: string, libraryIds: string[]) {
+  return request<WritingLibraryDeleteResult>("/novel-console/library/delete", {
+    method: "POST", body: JSON.stringify({ workflow_id: workflowId, library_ids: libraryIds }),
+  });
 }
 
 export async function getWritingLibraryItem(id: string) {
@@ -663,10 +700,14 @@ export async function getNovelReferenceCandidates(workflowId: string, workspace:
   return request<{candidates: Array<Record<string, unknown>>; candidates_sha256?: string; style_choices: ReferenceChoice[]; conflict_choices: ReferenceChoice[]; reference_choices_sha256: string}>(`/novel-console/reference-candidates?${query}`);
 }
 
-export async function publishWritingLibrary(payload: {
+type LibraryPublishPayload = {
   workflow_id: string; workspace: string; name: string; genres?: string[]; pov?: string[]; tone?: string[]; language?: string;
-}) {
-  return request<{ item: WritingLibraryItem }>("/novel-console/library/publish", {
+  task_id?: string;
+};
+export function publishWritingLibrary(payload: LibraryPublishPayload & { automatic: true; task_id: string }): Promise<{ item: WritingLibraryItem | null; removed?: boolean }>;
+export function publishWritingLibrary(payload: LibraryPublishPayload & { automatic?: false }): Promise<{ item: WritingLibraryItem }>;
+export async function publishWritingLibrary(payload: LibraryPublishPayload & { automatic?: boolean }) {
+  return request<{ item: WritingLibraryItem | null; removed?: boolean }>("/novel-console/library/publish", {
     method: "POST", body: JSON.stringify(payload),
   });
 }

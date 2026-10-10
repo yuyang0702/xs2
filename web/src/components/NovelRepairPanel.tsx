@@ -4,7 +4,7 @@ import { askNovelAssistant, applyNovelRepairPlan, fetchNovelAssistantHistory, ty
 import NovelArchiveContent from './NovelArchiveContent';
 
 type Props = {workspace: string; chapter: string; project: Record<string, unknown>; ready: boolean;
-  readerSummary: string; onRepair: (feedbackPath: string, modelId: string) => void; onFlow: () => void};
+  readerSummary: string; onRepair: (feedbackPath: string, modelId: string) => Promise<void>; onFlow: () => void};
 
 export default function NovelRepairPanel({workspace, chapter, project, ready, readerSummary, onRepair, onFlow}: Props) {
   const [entries, setEntries] = useState<NovelAssistantEntry[]>([]);
@@ -66,8 +66,8 @@ export default function NovelRepairPanel({workspace, chapter, project, ready, re
     try {
       const result = await applyNovelRepairPlan({workflow_id:'xs2-novel-flywheel-polish', workspace, entry_id:plan.id, plan:draft});
       if (!active.current) return;
-      if (result.already_applied) {setFeedback('这份方案已交给返修流程，请查看任务进度。'); setRefresh(value => value + 1); return;}
-      onRepair(result.feedback_path, result.model_id);
+      if (result.already_applied) {setFeedback('这份方案已准备好，正在恢复对应章节的返修流程…');}
+      await onRepair(result.feedback_path, result.model_id);
     } catch (error) {if (active.current) setFeedback(`尚未启动返修：${error instanceof Error ? error.message : String(error)}`);}
     finally {appliedGuard.current = false; if (active.current) setApplying(false);}
   };
@@ -90,7 +90,7 @@ export default function NovelRepairPanel({workspace, chapter, project, ready, re
       <div className="mt-4 max-h-[540px] overflow-auto"><NovelArchiveContent content={draft}/></div>
       {!plan.applied_at && <><button disabled={busy} onClick={() => setEditing(value => !value)} className="mt-3 rounded-lg border border-border px-3 py-2 text-sm">{editing ? '收起编辑' : '调整返修意见'}</button>{editing && <textarea aria-label="返修方案" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} rows={12} className="mt-3 w-full rounded-xl border border-border bg-background p-3 text-sm leading-7"/>}</>}
       <p className="mt-2 text-xs leading-6 text-muted-foreground">仅修改本章，原稿会备份。运行时需保持创作流程页打开；复评后停下供你检查，不会直接覆盖导出成品。方案过期会提示重新分析。</p>
-      {plan.applied_at && <button onClick={onFlow} className="mt-3 text-sm text-primary underline underline-offset-4">查看返修任务与进度</button>}
+      {plan.applied_at && <button disabled={busy} onClick={onFlow} className="mt-3 text-sm text-primary underline underline-offset-4">查看返修任务与进度</button>}
     </div>}
   </section>;
 }

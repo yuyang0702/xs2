@@ -50,6 +50,81 @@ def test_valid_json_with_chinese_dialogue_quotes_is_not_repaired():
     assert body.count("”") == 2
 
 
+def test_fenced_novel_json_preserves_dialogue_and_apostrophes():
+    body = '“别跟着我。”他说。她没接话，袋上还有‘东岸’的字样。'
+    raw = "```json\n" + json.dumps({"body": body}, ensure_ascii=False) + "\n```"
+
+    result = validate_and_format_json(raw)
+
+    assert result.success
+    assert result.data == {"body": body}
+    assert result.repairs == ["strip_markdown_fence"]
+
+
+def test_prefixed_novel_json_preserves_dialogue():
+    body = '“你看见了？”他问，“还是听别人说的？”'
+    raw = "下面是正文：\n" + json.dumps({"body": body}, ensure_ascii=False) + "\n完毕"
+
+    result = validate_and_format_json(raw)
+
+    assert result.success
+    assert result.data == {"body": body}
+    assert result.repairs == ["extract_json_body"]
+
+
+def test_literal_controls_in_novel_json_preserve_body_and_other_fields():
+    body = '“你跟着我。”\n\n袋口\t贴着手，标签\x00还在。'
+    raw = '{"body": "' + body + '", "meta": {"chapter": "0002", "notes": ["原句"]}}'
+
+    result = validate_and_format_json("```json\n" + raw + "\n```")
+
+    assert result.success
+    assert result.data == {
+        "body": body,
+        "meta": {"chapter": "0002", "notes": ["原句"]},
+    }
+    assert result.repairs == ["strip_markdown_fence", "escape_string_control_characters"]
+    assert json.loads(result.formatted) == result.data
+
+
+def test_literal_controls_are_rejected_when_repairs_are_disabled():
+    result = validate_and_format_json('{"body": "第一段\n第二段"}', repair=False)
+
+    assert not result.success
+    assert result.repairs == []
+
+
+def test_control_repair_does_not_guess_unescaped_dialogue_quotes():
+    raw = '{"body": "第一段\n"你跟着我。"他说。", "chapter": "0002"}'
+
+    result = validate_and_format_json(raw)
+
+    assert not result.success
+    assert "escape_string_control_characters" not in result.repairs
+
+
+def test_trailing_comma_repair_preserves_string_content():
+    body = '“别动。”纸上写着 , }，还有 , ] 和‘原文’。'
+    raw = json.dumps({"body": body}, ensure_ascii=False)[:-1] + ",}"
+
+    result = validate_and_format_json(raw)
+
+    assert result.success
+    assert result.data == {"body": body}
+    assert result.repairs == ["remove_trailing_commas"]
+
+
+def test_smart_quote_keys_preserve_ascii_delimited_prose():
+    body = '“我没跟。”他说，“我就是路过。”'
+    raw = '{“body”: ' + json.dumps(body, ensure_ascii=False) + ",}"
+
+    result = validate_and_format_json(raw)
+
+    assert result.success
+    assert result.data == {"body": body}
+    assert result.repairs == ["normalize_quotes", "remove_trailing_commas"]
+
+
 def test_normalize_smart_quote_keys_and_remove_trailing_commas():
     raw = '{“a”: 1, “b”: [2,],}'
     result = validate_and_format_json(raw)

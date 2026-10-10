@@ -1,6 +1,7 @@
 """Production progress from saved tasks and real artifacts, never chapter * 5%."""
 from pathlib import Path
 from .novel_library import read_json
+from .novel_repair import reader_report_path
 
 STAGES = [('build', '建立世界观'), ('character', '创建角色'), ('story-plan', '规划故事'),
           ('outline', '生成大纲'), ('mvp', '生成正文'), ('polish', '润色正文'),
@@ -14,7 +15,7 @@ def progress(root, state, workflows_dir):
     artifacts = {'build': 'meta/world_foundation.md', 'character': 'meta/character_profiles.md',
                  'story-plan': 'meta/story_plan.md', 'outline': 'outline/near_term_outline.md',
                  'mvp': f'story/{chapter}/chapter.md', 'polish': f'story/{chapter}/chapter.md',
-                 'reader-sim': 'quality/reader_report.json', 'post-hoc': f'story/{chapter}/diff_story_confirmed.md',
+                 'reader-sim': reader_report_path(root, chapter).relative_to(root).as_posix(), 'post-hoc': f'story/{chapter}/diff_story_confirmed.md',
                  'export': 'export/manuscript.md'}
     results = []
     current = ''
@@ -27,6 +28,10 @@ def progress(root, state, workflows_dir):
         path = (workflows_dir / workflow / 'tasks' / (task_id + '.json')).resolve()
         task = read_json(path, {}) if workflow and task_id and path.is_relative_to(workflows_dir.resolve()) else {}
         status = task.get('status', '')
+        if stage in {'mvp', 'polish', 'reader-sim', 'post-hoc'} and task:
+            task_chapter = task.get('parameter_values', {}).get('chapter_number')
+            if task_chapter is not None and str(task_chapter).zfill(4) != chapter:
+                task, status, reference = {}, '', {'mismatched_chapter': True}
         artifact = root / artifacts[stage]
         exists = artifact.is_file() and artifact.stat().st_size > 0
         complete = exists and (status == 'completed' or not reference and stage in state.get('completed', []))
@@ -45,7 +50,9 @@ def progress(root, state, workflows_dir):
         results.append({'id': stage, 'label': label, 'completed': complete, 'status': status or ('completed' if complete else 'not_started')})
     completed = sum(item['completed'] for item in results)
     exported = results[-1]['completed']
-    report = read_json(root / 'quality/reader_report.json', {})
+    report = read_json(reader_report_path(root, chapter), {})
+    if str(report.get('chapter_number', chapter)).zfill(4) != chapter:
+        report = {}
     if exported:
         label = current or ('本篇已导出' if state.get('mode') == 'short' else f'第{int(chapter)}章已导出')
     else:

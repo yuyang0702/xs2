@@ -429,6 +429,61 @@ class AgentNode(BaseNodePlugin):
                 node_def.id, session_id, ctx.task_id,
             )
 
+        async def _recover_terminal_session() -> str:
+            """在回调丢失时从子会话终态恢复节点结果。
+
+            工作流节点依赖 ``on_auto_complete`` 唤醒等待事件。子会话在
+            进程切换、事件转发失败或生命周期清理竞态下可能已经落盘为
+            completed/error，但回调没有抵达这里；如果只等待 completion_event，
+            任务就会一直显示为运行中。终态只在明确可判断时恢复，其他情况
+            返回可读错误，交给统一重试策略。
+            """
+            nonlocal _complete_called
+            session = getattr(sm, "sessions", {}).get(session_id)
+            if session is None:
+                getter = getattr(sm, "get_session", None)
+                if callable(getter):
+                    try:
+                        session = getter(session_id)
+                    except Exception:
+                        session = None
+            if session is None:
+                return (
+                    f"Agent 子会话 {session_id} 已不存在或已被清理，"
+                    "节点未收到完成回调；请重试当前节点。"
+                )
+
+            status = str(getattr(session, "status", "") or "").lower()
+            if status in {"error", "failed", "cancelled", "stopped"}:
+                last_error = getattr(session, "last_error", None)
+                detail = ""
+                if isinstance(last_error, dict):
+                    detail = str(last_error.get("message") or last_error.get("code") or "")
+                return (
+                    f"Agent 子会话 {session_id} 已结束但状态为 {status}"
+                    + (f"：{detail}" if detail else "")
+                )
+
+            if status != "completed":
+                return ""
+
+            # 有显式完成信号时只需补发事件；auto_flow/关闭完成工具时，
+            # 图完成本身就是合法终态，可以直接恢复为成功。
+            if not _complete_called:
+                if not (auto_flow or not enable_complete_node_task):
+                    return (
+                        f"Agent 子会话 {session_id} 已结束，但没有提交 "
+                        "complete_node_task，无法确认节点产出是否完整。"
+                    )
+                _complete_called = True
+                completion_result.update({
+                    "summary": self._get_latest_ai_message(sm, session_id),
+                    "status": "success",
+                    "error": "",
+                })
+            completion_event.set()
+            return ""
+
         # 等待常规执行或恢复后的审批结果（带超时）。
         try:
             timeout = WORKFLOW_NODE_TIMEOUT_SECONDS
@@ -437,7 +492,25 @@ class AgentNode(BaseNodePlugin):
                 node_def.id, session_id, ctx.task_id, timeout,
             )
             wait_start = time.time()
-            await asyncio.wait_for(completion_event.wait(), timeout=timeout)
+            deadline = time.monotonic() + timeout
+            while not completion_event.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                try:
+                    await asyncio.wait_for(
+                        completion_event.wait(),
+                        timeout=min(2.0, remaining),
+                    )
+                except asyncio.TimeoutError:
+                    recovery_error = await _recover_terminal_session()
+                    if recovery_error:
+                        return NodeResult(
+                            status="failed",
+                            error=recovery_error,
+                            session_id=session_id,
+                            token_usage=self._get_session_token_usage(sm, session_id),
+                        )
             wait_elapsed = time.time() - wait_start
             logger.debug(
                 "[AGENT-NODE] completion_event 被唤醒: node=%s, session=%s, task=%s, 等待时长=%.1fs",

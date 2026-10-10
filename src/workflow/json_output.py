@@ -113,6 +113,22 @@ def safe_repair_json_text(text: str) -> tuple[str, list[str]]:
         candidate = unfenced
         repairs.append("strip_markdown_fence")
 
+    if _try_loads(candidate):
+        return candidate, repairs
+
+    extracted = _extract_json_body(candidate)
+    if extracted != candidate:
+        candidate = extracted
+        repairs.append("extract_json_body")
+
+    if _try_loads(candidate):
+        return candidate, repairs
+
+    escaped_controls = _escape_string_controls(candidate)
+    if escaped_controls != candidate:
+        repairs.append("escape_string_control_characters")
+        return escaped_controls, repairs
+
     normalized = _normalize_quotes(candidate)
     if normalized != candidate:
         candidate = normalized
@@ -172,14 +188,43 @@ def _strip_markdown_fence(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _escape_string_controls(text: str) -> str:
+    """Escape literal controls only when the rest of the JSON parses intact."""
+    try:
+        data = json.loads(text, strict=False)
+    except JSONDecodeError:
+        # Missing delimiters and unescaped quotes are ambiguous; leave them
+        # for the producer's retry instead of guessing string boundaries.
+        return text
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
 def _normalize_quotes(text: str) -> str:
-    return (
-        text.replace("“", '"')
-        .replace("”", '"')
-        .replace("＂", '"')
-        .replace("‘", "'")
-        .replace("’", "'")
-    )
+    # Repair delimiters without changing dialogue or punctuation inside JSON
+    # strings. An outer code fence or trailing comma must not make valid prose
+    # quotes eligible for normalization.
+    output: list[str] = []
+    closer = ""
+    escaped = False
+    for char in text:
+        if closer:
+            if escaped:
+                output.append(char)
+                escaped = False
+            elif char == "\\":
+                output.append(char)
+                escaped = True
+            elif char == closer:
+                output.append('"')
+                closer = ""
+            else:
+                output.append(char)
+        elif char in {'"', "“", "＂"}:
+            output.append('"')
+            closer = "”" if char == "“" else char
+        else:
+            output.append(char)
+    return "".join(output)
 
 
 def _extract_json_body(text: str) -> str:
@@ -223,12 +268,30 @@ def _find_matching_bracket(text: str, start: int, opening: str, closing: str) ->
 
 
 def _remove_trailing_commas(text: str) -> str:
-    previous = None
-    current = text
-    while previous != current:
-        previous = current
-        current = re.sub(r",\s*([}\]])", r"\1", current)
-    return current
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+            output.append(char)
+        elif char == ",":
+            following = index + 1
+            while following < len(text) and text[following].isspace():
+                following += 1
+            if following >= len(text) or text[following] not in "}]":
+                output.append(char)
+        else:
+            output.append(char)
+    return "".join(output)
 
 
 def _remove_obvious_orphan_lines(text: str) -> str:

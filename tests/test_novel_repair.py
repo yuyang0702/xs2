@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -45,7 +46,29 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('原稿：他还没送到水。', captured[1][1])
         stored = jobs.history(self.root)[0]
         self.assertEqual(stored['repair_source']['reader_task_id'],'one')
+        self.assertEqual(stored['repair_source']['report_path'],'quality/reader_report.json')
         self.assertEqual(stored['purpose'],'reader_repair')
+
+    async def test_full_chapter_repair_can_complete_after_short_analysis_deadline(self):
+        context = repair_context(self.root, '0001', self.wfs)
+        class SlowModel:
+            model_name = 'test-model'
+            async def ainvoke(self, messages):
+                await asyncio.sleep(0.02)
+                return SimpleNamespace(content='写出送水现场，并保留承诺。')
+        jobs = NovelAssistantJobs()
+        with (
+            patch('src.web.novel_assistant.ANALYSIS_TIMEOUT_SECONDS', 0.001),
+            patch('src.web.novel_assistant.ADVISOR_COMPLETION_TIMEOUT_SECONDS', 1),
+            patch('src.web.novel_assistant.create_llm', return_value=SlowModel()) as factory,
+        ):
+            entry = jobs.start(self.root, 'delayed-repair', {
+                'question': '规划返修', 'purpose': 'reader_repair',
+                'chapter': '0001', '_repair_context': context,
+            })
+            await jobs.tasks[entry['id']]
+        self.assertEqual(jobs.history(self.root)[0]['status'], 'completed')
+        self.assertEqual(factory.call_args.kwargs['timeout'], 1)
 
     def test_prepare_preserves_body_and_copies_edited_plan_with_chapter_scope(self):
         source = repair_context(self.root,'0001',self.wfs)

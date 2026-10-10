@@ -166,7 +166,9 @@ class NovelAssistantJobs:
                                                or any((root / 'story').glob('*/chapter.md')))}
         repair = payload.get('_repair_context')
         if repair:
-            entry['repair_source'] = {key: repair[key] for key in ('chapter', 'chapter_sha256', 'report_sha256', 'reader_task_id')}
+            entry['repair_source'] = {key: repair[key] for key in
+                                     ('chapter', 'chapter_sha256', 'report_sha256', 'reader_task_id', 'report_path')
+                                     if key in repair}
             entry['reader_summary'] = repair['summary']
         self._write(root, [*entries, entry])
         task = asyncio.create_task(self._run(root, request_id, payload))
@@ -246,6 +248,11 @@ class NovelAssistantJobs:
             user = "用户问题：\n" + payload["question"].strip() + "\n\n参考上下文：\n" + json.dumps(context, ensure_ascii=False)
             response = None
             llm = None
+            completion_timeout = (
+                ADVISOR_COMPLETION_TIMEOUT_SECONDS
+                if payload.get('purpose') in {'advisor', 'plot', 'general', 'reader_repair'}
+                else ANALYSIS_TIMEOUT_SECONDS
+            )
             max_attempts = len(TRANSIENT_RETRY_DELAYS_SECONDS) + 1
             for attempt in range(max_attempts):
                 if attempt:
@@ -258,7 +265,7 @@ class NovelAssistantJobs:
                     await asyncio.sleep(TRANSIENT_RETRY_DELAYS_SECONDS[attempt - 1])
                 # Resolve current model settings for each attempt rather than
                 # holding a startup client with stale provider credentials.
-                llm = create_llm(model_override=payload.get('_model_override'), streaming=True, timeout=ANALYSIS_TIMEOUT_SECONDS,
+                llm = create_llm(model_override=payload.get('_model_override'), streaming=True, timeout=completion_timeout,
                                  provider_retries_enabled=False)
                 try:
                     def on_output():
@@ -269,8 +276,7 @@ class NovelAssistantJobs:
                         self._write(root, entries)
                     response = await asyncio.wait_for(
                         _receive_model_reply(llm, [("system", system), ("human", user)], on_output),
-                        timeout=(ADVISOR_COMPLETION_TIMEOUT_SECONDS
-                                 if payload.get('purpose') in {'advisor', 'plot', 'general'} else ANALYSIS_TIMEOUT_SECONDS),
+                        timeout=completion_timeout,
                     )
                     break
                 except Exception as error:

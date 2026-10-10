@@ -608,6 +608,13 @@ class WorkflowEngine(WorkflowFlowMixin, WorkflowLoopMixin):
                 return idx
             if step["type"] == "branch" and from_node_id in step.get("nodes", []):
                 return idx
+            if step["type"] == "condition_gateway" and any(
+                branch.get("target") == from_node_id
+                for branch in step.get("branches", [])
+            ):
+                # Alternative branches are expanded by the gateway at runtime
+                # and may not appear as node steps in the outer plan.
+                return idx
         return 0
 
     def resolve_approval(self, workflow_id: str, task_id: str,
