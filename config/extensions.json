@@ -1,6 +1,4 @@
 {
-  "enabled": [
-    "xs2-novel-flywheel"
-  ],
+  "enabled": [],
   "strict_startup": false
 }
