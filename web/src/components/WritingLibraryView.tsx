@@ -153,6 +153,14 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
       <h1 className="mt-2 text-3xl font-semibold tracking-tight">跨作品复用蒸馏结果</h1>
       <p className="mt-2 text-sm text-muted-foreground">先按题材和视角匹配，再由你决定哪些风格、写法和冲突进入本书。</p>
     </header>
+    <div className="rounded-xl border border-blue-300/25 bg-blue-300/5 p-4">
+      <p className="text-sm leading-7">
+        💡 <strong>推荐</strong>：使用「创作流程 → AI 小说顾问」获得个性化写法推荐，一键快速采用。
+      </p>
+      <p className="mt-2 text-xs leading-6 text-muted-foreground">
+        本页面适合高级用户手动浏览和选择写法库。如果您希望 AI 根据作品自动推荐最合适的写法，请使用创作流程中的小说顾问功能。
+      </p>
+    </div>
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3" aria-label="写法库批量操作">
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <label className="flex min-h-10 cursor-pointer items-center gap-2">
