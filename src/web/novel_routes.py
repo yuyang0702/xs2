@@ -651,7 +651,7 @@ class LibraryDelete(BaseModel):
 def delete_writing_library(payload: LibraryDelete, request: Request):
     """Delete shared entries only; books own independent candidate/blueprint copies."""
     _ensure_http_mutation_allowed(request, payload.workflow_id)
-    _ensure_workflow_writable(request, payload.workflow_id)
+    mgr = _ensure_workflow_writable(request, payload.workflow_id)
     deleted, missing, failed = [], [], []
     with _lock:
         root = _library_root.resolve()
@@ -685,6 +685,11 @@ def delete_writing_library(payload: LibraryDelete, request: Request):
             markers[library_source_key(candidates)] = deleted_at
         if targets:
             atomic_json(markers_path, markers)
+
+        # Cascade cleanup: remove references from all project workspaces
+        deleted_ids = {item_id for item_id, _ in targets}
+        _cleanup_library_references(mgr, deleted_ids)
+
         for item_id, folder in targets:
             try:
                 shutil.rmtree(folder)
@@ -692,6 +697,52 @@ def delete_writing_library(payload: LibraryDelete, request: Request):
             except OSError:
                 failed.append({"id": item_id, "message": "文件正在使用或没有删除权限，请稍后重试"})
     return {"success": not failed, "deleted_ids": deleted, "missing_ids": missing, "failed": failed}
+
+
+def _cleanup_library_references(mgr, deleted_ids: set[str]):
+    """Clean up references to deleted libraries from all project workspaces."""
+    try:
+        # Find all book workspaces
+        books_root = Path("data/workspaces/books")
+        if not books_root.exists():
+            return
+
+        for project_dir in books_root.iterdir():
+            if not project_dir.is_dir():
+                continue
+
+            library_refs_path = project_dir / "learning/library_refs.json"
+            if not library_refs_path.is_file():
+                continue
+
+            try:
+                refs = read_json_file(library_refs_path, None)
+                if not isinstance(refs, dict):
+                    continue
+
+                items = refs.get("items", [])
+                if not isinstance(items, list):
+                    continue
+
+                # Remove deleted library IDs
+                original_items = items.copy()
+                items = [item for item in items if item not in deleted_ids]
+
+                # Update active_library_id if it was deleted
+                active = refs.get("active_library_id")
+                if active in deleted_ids:
+                    refs["active_library_id"] = items[0] if items else ""
+
+                # Only write if something changed
+                if items != original_items or (active in deleted_ids):
+                    refs["items"] = items
+                    atomic_json(library_refs_path, refs)
+            except Exception:
+                # Continue cleaning other projects even if one fails
+                continue
+    except Exception:
+        # Non-fatal: cleanup is best-effort
+        pass
 
 
 @router.post("/library/publish")

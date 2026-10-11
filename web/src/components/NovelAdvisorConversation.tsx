@@ -9,7 +9,7 @@ import { advisorMarkdown } from '../lib/novel-advisor';
 export default function NovelAdvisorConversation({
   question, onQuestion, onAsk, entries, busy, loading,
   feedback, now, receipts, onAdopt, onRead, workflowBusy, established, hasReference,
-  librarySize, adoptedCount, onQuickAdopt
+  librarySize, adoptedCount, onQuickAdopt, onManualSelect
 }: {
   question: string;
   onQuestion: (value: string) => void;
@@ -28,6 +28,7 @@ export default function NovelAdvisorConversation({
   established: boolean;
   hasReference: boolean;
   onQuickAdopt?: (entry: NovelAssistantEntry) => Promise<{ success: boolean; message: string }>;
+  onManualSelect?: () => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const [notice, setNotice] = useState('');
@@ -173,7 +174,10 @@ export default function NovelAdvisorConversation({
                 取消
               </button>
               <button
-                onClick={() => handleQuickAdopt(false)}
+                onClick={() => {
+                  setShowQuickAdoptDialog(false);
+                  onManualSelect?.();
+                }}
                 className="rounded-lg border border-primary/30 px-4 py-2 text-sm text-primary"
               >
                 手动选择
