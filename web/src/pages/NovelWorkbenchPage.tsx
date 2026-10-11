@@ -858,6 +858,12 @@ function DistillationView({catalog,onRefreshCatalog,onLibrary}:{catalog:CatalogI
 }
 
 function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter, moduleOnly = false, project, setProject, stages, currentStage, catalog, workspace, files, chapters, onHome, onRefreshCatalog, onRefreshFiles, onReview, onLibrary, onReferenceAdopted, onOpenAssistant }: { chapterOpening?: boolean; nextChapterNumber?: string; onContinueChapter?: (chapter: string, action?: string, automatic?: boolean) => Promise<void>; moduleOnly?: boolean; project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; stages: StageMeta[]; currentStage: StageMeta; catalog: CatalogItem[]; workspace: string; files: WorkspaceFile[]; chapters: Array<{ number: string; file: WorkspaceFile }>; onHome: () => void; onRefreshCatalog: () => Promise<void>; onRefreshFiles: () => Promise<void>; onReview: () => void; onLibrary: () => void; onReferenceAdopted?: () => Promise<void>; onOpenAssistant?: () => void }) {
+  // 本地 openReference 函数用于顾问模式的跳转
+  const openReference = () => {
+    // 此函数在顾问模式下调用，仅用于占位
+    // 实际的跳转逻辑由 onManualSelect 回调处理
+  };
+
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]); const [importUrl, setImportUrl] = useState(""); const [importUrlBusy, setImportUrlBusy] = useState(false); const [importUrlError, setImportUrlError] = useState(""); const [importWarnings, setImportWarnings] = useState<string[]>([]); const [importChapters, setImportChapters] = useState<Array<{ index: number; title: string; url: string; selected?: boolean }>>([]); const [urlImported, setUrlImported] = useState(false); const [libraryName, setLibraryName] = useState(""); const [saveMessage, setSaveMessage] = useState(""); const [savingLibrary, setSavingLibrary] = useState(false); const [refreshingCatalog, setRefreshingCatalog] = useState(false); const [refreshingFiles, setRefreshingFiles] = useState(false);
   const [task, setTask] = useState<any>(null); const [verified, setVerified] = useState(false); const [launching, setLaunching] = useState(false); const [error, setError] = useState(""); const [actionFeedback, setActionFeedback] = useState(""); const [preview, setPreview] = useState(""); const [modelPending, setModelPending] = useState(false); const [candidateSet, setCandidateSet] = useState<CandidateSet | null>(null); const [showAllFields, setShowAllFields] = useState(false);
   const launchGuard = useRef(false); const autoAdvancedKey = useRef(""); const autoStartedKey = useRef(""); const autoStartIndex = useRef<number | null>(null); const autoPublishedKey = useRef(""); const outlineConfirmed = useRef(false); const outlineSnapshot = useRef<{taskId: string; content: string; inventory: ReturnType<typeof outlineImpactInventory>} | null>(null); const outlineReportedTask = useRef(""); const filesRefreshedTask = useRef(""); const adoptionNotified = useRef(""); const [outlineImpactOpen, setOutlineImpactOpen] = useState(false); const [outlineUpdateReport, setOutlineUpdateReport] = useState<(ReturnType<typeof compareNovelOutlines> & {inventory: ReturnType<typeof outlineImpactInventory>}) | null>(null); const outlineInventory = useMemo(() => outlineImpactInventory(files), [files]); const stageIndex = Math.max(0, stages.findIndex((item) => item.id === currentStage.id)); const ref = project.refs[currentStage.id]; const workflow = catalog.find((item) => item.workflow_id === workflowId(currentStage.id)); const busy = launching || (!!task && !terminal.includes(task.status)); const done = verified && task?.status === "completed" && task.workflow_id === workflowId(currentStage.id) && task.task_id === ref?.task_id; const outlineHasExisting = currentStage.id === "outline" && (files.some(file => file.path === "outline/near_term_outline.md") || (done && preview.trim().length > 0)); const variables = workflow?.definition?.variables || [];
@@ -1382,9 +1388,6 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
 
   const handleQuickAdopt = async (entry: NovelAssistantEntry): Promise<{success: boolean; message: string}> => {
     try {
-      // 显示进度提示
-      setPageFeedback("⏳ 正在引用写法库...");
-
       // 1. 获取写法库列表
       const libraryList = await listWritingLibrary();
       if (!libraryList.items || libraryList.items.length === 0) {
@@ -1434,19 +1437,12 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
         return { success: false, message: "引用写法库成功，但采用配置失败。请手动完成后续步骤。" };
       }
 
-      // 8. 跳转到"本书参考写法"页面，并自动打开兼容顾问
-      setReferenceStage("style-compatibility-advisor"); // 自动跳转到兼容顾问阶段
-      setView("reference");
-
-      setPageFeedback(
-        `✅ 已快速采用！引用了写法库「${libraryList.items[0].name}」，已选中 ${candidateIds.length} 条推荐写法。\n\n` +
-        `💡 提示：系统将自动运行写法兼容检查。检查完成后，请审查适配建议并点击"将风格与冲突建议填入适配草稿"，` +
-        `然后切换到"选择与确认"标签页，点击"确认已选写法"完成采用。`
-      );
+      // 8. 自动跳转到"本书参考写法"页面（兼容顾问阶段）
+      onManualSelect?.(); // 触发跳转回调
 
       return {
         success: true,
-        message: `已跳转到"本书参考写法"页面，正在运行兼容检查...`
+        message: `✅ 已快速采用！引用了写法库「${libraryList.items[0].name}」，已选中 ${candidateIds.length} 条推荐写法。\n\n💡 下一步：点击"让 AI 检查适配"运行兼容检查，审查建议后点击"将建议填入适配草稿"，然后切换到"选择与确认"完成采用。`
       };
     } catch (error) {
       return {
