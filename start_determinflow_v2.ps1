@@ -241,8 +241,13 @@ if ($ready) {
     Write-Host "Press Ctrl+C to stop the service" -ForegroundColor Yellow
     Write-Host ""
 
+    # Open browser with cache-busting parameter
+    $timestamp = [DateTimeOffset]::Now.ToUnixTimeSeconds()
+    $url = "http://127.0.0.1:8020/?_t=$timestamp"
+
     try {
-        Start-Process "http://127.0.0.1:8020/"
+        Start-Process $url
+        Write-Host "Browser opened with cache refresh" -ForegroundColor Green
     } catch {
         Write-Host "Please open the URL above in your browser" -ForegroundColor Yellow
     }
