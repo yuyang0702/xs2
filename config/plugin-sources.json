@@ -27,7 +27,7 @@
     {
       "id": "custom-xs2-local",
       "name": "XS2 本地插件仓库（优先）",
-      "url": "file://../DeterminFlow-Plugins",
+      "url": "../DeterminFlow-Plugins",
       "ref": "main",
       "priority": 100
     },

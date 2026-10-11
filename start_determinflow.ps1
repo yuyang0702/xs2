@@ -25,27 +25,7 @@ function Test-Service([string]$Address) {
     }
 }
 
-function Test-DependenciesInstalled {
-    try {
-        $packages = @("openai", "fastapi", "langgraph")
-        foreach ($package in $packages) {
-            $result = & $venvPython -c "import $package" 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                return $false
-            }
-        }
-        return $true
-    } catch {
-        return $false
-    }
-}
-
-if (Test-Service $Url) {
-    Write-Info "The service is already running; opening the browser."
-    Start-Process $Url
-    exit 0
-}
-
+# 寻找可用的 Python 3.11+
 function Get-PythonCommand {
     $candidates = @(
         @{ File = (Join-Path $Root ".venv\Scripts\python.exe"); Kind = "path" },
@@ -76,132 +56,109 @@ function Get-PythonCommand {
     return $null
 }
 
+Write-Host ""
+Write-Host "════════════════════════════════════════════════════════════"
+Write-Host "  DeterminFlow 自动启动脚本"
+Write-Host "════════════════════════════════════════════════════════════"
+Write-Host ""
+
+# 步骤 1: 检查服务是否已运行
+if (Test-Service $Url) {
+    Write-Info "The service is already running; opening the browser."
+    Start-Process $Url
+    exit 0
+}
+
+# 步骤 2: 寻找 Python
+Write-Info "Looking for Python 3.11+..."
 $python = Get-PythonCommand
 if ($null -eq $python) {
-    Write-Host "Python 3.11 or newer was not found." -ForegroundColor Red
-    Write-Host "Install Python 3.11+ and run this launcher again."
-    Write-Host "For a ready-to-run build, open: https://github.com/alikon-art/DeterminFlow/releases/latest"
+    Write-Error-Custom "Python 3.11 or newer was not found."
+    Write-Host "Please install Python 3.11+ and run this launcher again."
+    Write-Host "Download from: https://www.python.org/downloads/"
     Read-Host "Press Enter to exit"
     exit 1
 }
+Write-Success "Found Python at: $($python.File)"
 
+# 步骤 3: 创建虚拟环境（如需要）
 $venvPython = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
-    Write-Info "Creating the Python virtual environment."
+    Write-Info "Creating Python virtual environment..."
     if ($python.File -eq "py") {
         & py -3.11 -m venv (Join-Path $Root ".venv")
     } else {
         & $python.File -m venv (Join-Path $Root ".venv")
     }
-}
 
-if (-not (Test-Path $venvPython)) {
-    throw "Virtual environment creation failed: $venvPython"
-}
-
-# === 自动检测并安装依赖 ===
-$requirements = Join-Path $Root "requirements.txt"
-$requirementsDev = Join-Path $Root "requirements-dev.txt"
-$dependencyMarker = Join-Path $Root ".venv\.determinflow-dependencies-ready"
-
-Write-Info "Checking dependencies..."
-
-# 检查 requirements.txt 和 requirements-dev.txt
-$hasRequirements = (Test-Path $requirements) -or (Test-Path $requirementsDev)
-
-if ($hasRequirements) {
-    $needsInstall = $false
-
-    # 检查依赖标记文件
-    if (-not (Test-Path $dependencyMarker)) {
-        $needsInstall = $true
-        Write-Info "Dependencies marker not found, installing dependencies."
-    } else {
-        # 检查依赖文件是否更新过
-        $markerTime = (Get-Item $dependencyMarker).LastWriteTimeUtc
-
-        if ((Test-Path $requirements) -and (Get-Item $requirements).LastWriteTimeUtc -gt $markerTime) {
-            $needsInstall = $true
-            Write-Info "requirements.txt has been updated, reinstalling dependencies."
-        }
-
-        if ((Test-Path $requirementsDev) -and (Get-Item $requirementsDev).LastWriteTimeUtc -gt $markerTime) {
-            $needsInstall = $true
-            Write-Info "requirements-dev.txt has been updated, reinstalling dependencies."
-        }
-
-        # 检查关键包是否已安装
-        if (-not (Test-DependenciesInstalled)) {
-            $needsInstall = $true
-            Write-Info "Some dependencies are missing, reinstalling."
-        }
-    }
-
-    if ($needsInstall) {
-        Write-Info "Installing Python dependencies; this may take a few minutes."
-
-        # 升级 pip
-        Write-Info "Upgrading pip..."
-        & $venvPython -m pip install --upgrade pip | Out-Null
-
-        # 安装主要依赖
-        if (Test-Path $requirements) {
-            Write-Info "Installing requirements.txt..."
-            & $venvPython -m pip install -r $requirements
-        }
-
-        # 安装开发依赖
-        if (Test-Path $requirementsDev) {
-            Write-Info "Installing requirements-dev.txt..."
-            & $venvPython -m pip install -r $requirementsDev
-        }
-
-        # 更新标记文件
-        Set-Content -Path $dependencyMarker -Value (Get-Date).ToUniversalTime().ToString("o") -Encoding UTF8
-        Write-Success "Dependencies installed successfully."
-    } else {
-        Write-Success "All dependencies are up to date."
-    }
-} else {
-    # 兼容旧的 requirements.lock 文件
-    $requirementsLock = Join-Path $Root "requirements.lock"
-
-    if (-not (Test-Path $requirementsLock)) {
-        Write-Host "Error: requirements.txt/requirements-dev.txt or requirements.lock not found" -ForegroundColor Red
+    if (-not (Test-Path $venvPython)) {
+        Write-Error-Custom "Failed to create virtual environment"
+        Read-Host "Press Enter to exit"
         exit 1
     }
+    Write-Success "Virtual environment created"
+}
 
-    if (-not (Test-Path $dependencyMarker) -or (Get-Item $requirementsLock).LastWriteTimeUtc -gt (Get-Item $dependencyMarker).LastWriteTimeUtc) {
-        Write-Info "Installing Python dependencies; the first run can take a few minutes."
-        & $venvPython -m pip install -r $requirementsLock
-        Set-Content -Path $dependencyMarker -Value (Get-Date).ToUniversalTime().ToString("o") -Encoding UTF8
+# 步骤 4: 自动检测和安装依赖
+Write-Info "Checking dependencies..."
+
+$requirements = Join-Path $Root "requirements.txt"
+$dependencyMarker = Join-Path $Root ".venv\.determinflow-dependencies-ready"
+$needsInstall = $false
+
+if ((Test-Path $requirements)) {
+    if (-not (Test-Path $dependencyMarker)) {
+        $needsInstall = $true
+    } else {
+        $markerTime = (Get-Item $dependencyMarker).LastWriteTimeUtc
+        if ((Get-Item $requirements).LastWriteTimeUtc -gt $markerTime) {
+            $needsInstall = $true
+        }
     }
 }
 
+if ($needsInstall) {
+    Write-Info "Installing Python dependencies (this may take a few minutes)..."
+
+    # 升级 pip
+    Write-Info "Upgrading pip..."
+    & $venvPython -m pip install --upgrade pip 2>&1 | Out-Null
+
+    # 安装依赖
+    if (Test-Path $requirements) {
+        Write-Info "Installing from requirements.txt..."
+        & $venvPython -m pip install -r $requirements 2>&1 | Out-Null
+        Write-Success "Dependencies installed"
+    }
+
+    # 创建标记
+    Set-Content -Path $dependencyMarker -Value (Get-Date).ToUniversalTime().ToString("o") -Encoding UTF8
+} else {
+    Write-Success "All dependencies are up to date"
+}
+
+# 步骤 5: 配置文件初始化
 if (-not (Test-Path (Join-Path $Root ".env"))) {
-    Copy-Item (Join-Path $Root ".env.example") (Join-Path $Root ".env")
+    Write-Info "Creating .env file..."
+    Copy-Item (Join-Path $Root ".env.example") (Join-Path $Root ".env") -ErrorAction SilentlyContinue
 }
 
 $modelConfig = Join-Path $Root "config\models_config.json"
 if (-not (Test-Path $modelConfig)) {
-    Copy-Item (Join-Path $Root "config\models_config.example.json") $modelConfig
+    Write-Info "Creating models configuration..."
+    Copy-Item (Join-Path $Root "config\models_config.example.json") $modelConfig -ErrorAction SilentlyContinue
 }
 
-# === 自动检测和安装必需的插件 ===
-# 注意：插件检查在 run.py 中执行，这里不再重复调用
-# 这样可以避免 PowerShell 的编码问题
-Write-Info "Plugins will be checked during service startup..."
-
-
-Write-Info "Starting the local service."
+# 步骤 6: 启动服务
+Write-Info "Starting the local service..."
 $process = Start-Process -FilePath $venvPython -ArgumentList @("run.py") -WorkingDirectory $Root -PassThru
 
 $ready = $false
 for ($i = 0; $i -lt 180; $i++) {
     Start-Sleep -Seconds 1
     if ($process.HasExited) {
-        Write-Host "The backend process exited with code $($process.ExitCode)." -ForegroundColor Red
-        Write-Host "Check the backend window for details."
+        Write-Error-Custom "The backend process exited with code $($process.ExitCode)."
+        Write-Host "Check the output above for details."
         Read-Host "Press Enter to exit"
         exit 1
     }
@@ -212,9 +169,10 @@ for ($i = 0; $i -lt 180; $i++) {
 }
 
 if (-not $ready) {
-    Write-Host "The service did not become ready within 180 seconds." -ForegroundColor Yellow
+    Write-Error-Custom "The service did not become ready within 180 seconds."
     exit 1
 }
 
-Write-Info "Service ready; opening $Url"
+Write-Success "Service ready!"
+Write-Info "Opening $Url in browser..."
 Start-Process $Url
