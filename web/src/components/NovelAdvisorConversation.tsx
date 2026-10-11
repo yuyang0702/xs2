@@ -9,7 +9,7 @@ import { advisorMarkdown } from '../lib/novel-advisor';
 export default function NovelAdvisorConversation({
   question, onQuestion, onAsk, entries, busy, loading,
   feedback, now, receipts, onAdopt, onRead, workflowBusy, established, hasReference,
-  librarySize, adoptedCount
+  librarySize, adoptedCount, onQuickAdopt
 }: {
   question: string;
   onQuestion: (value: string) => void;
@@ -27,17 +27,35 @@ export default function NovelAdvisorConversation({
   workflowBusy: boolean;
   established: boolean;
   hasReference: boolean;
+  onQuickAdopt?: (entry: NovelAssistantEntry) => Promise<{ success: boolean; message: string }>;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const [notice, setNotice] = useState('');
   const [followup, setFollowup] = useState(false);
+  const [quickAdopting, setQuickAdopting] = useState(false);
+  const [showQuickAdoptDialog, setShowQuickAdoptDialog] = useState(false);
   const running = entries.find(entry => entry.status === 'running');
   const latest = [...entries].reverse().find(entry => entry.status === 'completed' && entry.purpose === 'advisor');
   const last = entries[entries.length - 1];
   const disabled = busy || loading || workflowBusy;
   const hasLibrary = (librarySize || 0) > 0;
   const hasAdopted = (adoptedCount || 0) > 0;
+  const hasMechanismRecommendations = !!(latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length);
   const quick = (value: string) => { onQuestion(value); setFollowup(false); input.current?.focus(); };
+
+  const handleQuickAdopt = async (skipCompatibility: boolean) => {
+    if (!latest || !onQuickAdopt) return;
+    setShowQuickAdoptDialog(false);
+    setQuickAdopting(true);
+    try {
+      const result = await onQuickAdopt(latest);
+      setNotice(result.message);
+    } catch (error) {
+      setNotice(`快速采用失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setQuickAdopting(false);
+    }
+  };
 
   return <div className="mt-6 space-y-6">
     <div className="flex items-center gap-2 text-xs text-emerald-400">
@@ -125,7 +143,68 @@ export default function NovelAdvisorConversation({
       ] as const).map(([key, title]) => <article key={key} className={`rounded-xl border p-5 ${key === 'risks' ? 'border-amber-300/25 bg-amber-300/5' : 'border-border bg-background/40'}`}><h4 className="mb-3 font-medium">{title}</h4><NovelArchiveContent content={advisorMarkdown(latest.advisor_sections?.[key] || '本次暂未提供，请继续讨论。')} /></article>)}</div>
       <details className="rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">{receipts?.[latest.id] ? '查看本次填写记录' : '查看建议参数（尚未采用）'}</summary><NovelConfigurationSuggestions entry={{ ...latest, purpose: 'configure' }} receipt={receipts?.[latest.id]} pendingApproval={!receipts?.[latest.id]} /></details>
       {latest.advisor_sections?.mechanism_recommendations && <details className="rounded-xl border border-blue-300/25 bg-blue-300/5 p-4"><summary className="cursor-pointer text-sm font-medium">📝 推荐的写法机制</summary><div className="mt-4 space-y-4 text-xs"><div>{(latest.advisor_sections.mechanism_recommendations.adopted_from_library?.length ?? 0) > 0 && <div><p className="mb-2 font-medium text-blue-700">从参考作品采用：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.mechanism_recommendations.adopted_from_library!.map((m, i) => <li key={i}>【{m.priority}】<strong>{m.mechanism}</strong> - {m.usage_in_story}（在{m.chapter_placement || '创作中'}使用）</li>)}</ul></div>}{(latest.advisor_sections.mechanism_recommendations.new_mechanisms?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-blue-700">补充的新机制：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.mechanism_recommendations.new_mechanisms!.map((m, i) => <li key={i}>【{m.priority}】<strong>{m.mechanism}</strong> - {m.reason}{m.synergy_with?.length > 0 && `（与${m.synergy_with.join('、')}协同）`}</li>)}</ul></div>}{(latest.advisor_sections.mechanism_recommendations.avoid_combinations?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-amber-600">⚠️ 避免的组合：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.mechanism_recommendations.avoid_combinations!.map((c, i) => <li key={i}><strong>{c.a}</strong> + <strong>{c.b}</strong>：{c.reason}</li>)}</ul></div>}</div></div></details>}
-      <div className="flex flex-wrap gap-3"><button disabled={disabled} onClick={() => { setFollowup(true); onQuestion(''); input.current?.focus(); }} className="flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-sm disabled:opacity-50"><MessageCircle className="h-4 w-4" />继续讨论这个方向</button><button disabled={disabled || !!receipts?.[latest.id] || !(latest.suggestions || []).some(item => item.key === 'premise')} onClick={() => setNotice(onAdopt(latest).message)} className="rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">{receipts?.[latest.id] ? '这套方案已采用' : established ? '采用建议，保留现有进度' : '采用方案，填写设置并继续'}</button></div>
+
+      {showQuickAdoptDialog && hasMechanismRecommendations && onQuickAdopt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowQuickAdoptDialog(false)}>
+          <div className="mx-4 max-w-lg rounded-2xl border border-border bg-background p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold">快速采用推荐写法</h3>
+            <p className="mt-3 text-sm leading-7 text-muted-foreground">
+              将自动完成以下操作：
+            </p>
+            <ul className="mt-3 space-y-2 text-sm">
+              <li className="flex items-start gap-2">
+                <span className="text-primary">✓</span>
+                <span>引用写法库到本书候选</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary">✓</span>
+                <span>自动采用 AI 推荐的 {latest.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length || 0} 条写法机制</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary">✓</span>
+                <span>保存到已采用写法（可在"本书参考写法"中查看和调整）</span>
+              </li>
+            </ul>
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              <button
+                onClick={() => setShowQuickAdoptDialog(false)}
+                className="rounded-lg border border-border px-4 py-2 text-sm"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => handleQuickAdopt(false)}
+                className="rounded-lg border border-primary/30 px-4 py-2 text-sm text-primary"
+              >
+                手动选择
+              </button>
+              <button
+                onClick={() => handleQuickAdopt(true)}
+                className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground"
+              >
+                确认快速采用
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-3">
+        <button disabled={disabled} onClick={() => { setFollowup(true); onQuestion(''); input.current?.focus(); }} className="flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-sm disabled:opacity-50"><MessageCircle className="h-4 w-4" />继续讨论这个方向</button>
+
+        {hasMechanismRecommendations && onQuickAdopt && !hasAdopted && (
+          <button
+            disabled={disabled || quickAdopting}
+            onClick={() => setShowQuickAdoptDialog(true)}
+            className="flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+          >
+            {quickAdopting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {quickAdopting ? '正在采用写法...' : '快速采用推荐写法'}
+          </button>
+        )}
+
+        <button disabled={disabled || !!receipts?.[latest.id] || !(latest.suggestions || []).some(item => item.key === 'premise')} onClick={() => setNotice(onAdopt(latest).message)} className="rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">{receipts?.[latest.id] ? '这套方案已采用' : established ? '采用建议，保留现有进度' : '采用方案，填写设置并继续'}</button>
+      </div>
     </section>}
     {entries.filter(entry => entry.status !== 'running' && entry.id !== latest?.id).length > 0 && <details className="rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm">查看之前的讨论</summary>{entries.filter(entry => entry.status !== 'running' && entry.id !== latest?.id).reverse().map(entry => <div key={entry.id} className="mt-4 border-t border-border pt-4"><p className="text-sm leading-7">{entry.question.length > 140 ? entry.question.slice(0, 140) + '…' : entry.question}</p><button onClick={() => onRead(entry)} className="mt-2 rounded-lg border border-border px-3 py-2 text-xs">{entry.status === 'completed' ? '阅读分析' : '查看失败原因'}</button></div>)}</details>}
   </div>;

@@ -1379,7 +1379,52 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
       if (mounted.current) setSubmitting(false);
     }
   };
-  if (advisorMode) return <><NovelAdvisorConversation question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)}/>
+
+  const handleQuickAdopt = async (entry: NovelAssistantEntry): Promise<{success: boolean; message: string}> => {
+    try {
+      // 1. 获取写法库列表
+      const libraryList = await listWritingLibrary();
+      if (!libraryList.items || libraryList.items.length === 0) {
+        return { success: false, message: "写法库为空，无法快速采用。" };
+      }
+
+      // 2. 默认引用第一个写法库（后续可优化为智能匹配）
+      const libraryId = libraryList.items[0].id;
+
+      // 3. 调用引用接口
+      await attachWritingLibrary({
+        workflow_id: workflowId("build"),
+        workspace,
+        library_id: libraryId,
+        refresh: false
+      });
+
+      // 4. 更新项目状态，标记写法库已引用
+      setProject(current => ({
+        ...current,
+        writingMode: "reuse",
+        libraryRefs: [...new Set([...current.libraryRefs, libraryId])],
+      }));
+
+      // 5. 采用顾问建议的配置
+      const adoptResult = onAdoptAdvisor?.(entry);
+      if (!adoptResult?.success) {
+        return { success: false, message: "引用写法库成功，但采用配置失败。请手动完成后续步骤。" };
+      }
+
+      return {
+        success: true,
+        message: `✅ 已快速采用！引用了写法库「${libraryList.items[0].name}」并采用了 AI 推荐的写法。可在"本书参考写法"中查看和调整。`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `快速采用失败：${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+  };
+
+  if (advisorMode) return <><NovelAdvisorConversation question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)} onQuickAdopt={handleQuickAdopt}/>
     {readingEntry && <NovelReadingDialog title="AI 小说顾问 · 讨论结果" onClose={()=>setReadingEntry(null)}><details className="mb-5 text-sm leading-7 text-muted-foreground"><summary className="cursor-pointer">查看本次讨论的原始想法</summary><p className="mt-3 whitespace-pre-wrap">{readingEntry.question}</p></details><NovelArchiveContent content={advisorMarkdown(readingEntry.reply || readingEntry.message || "暂无分析内容")}/>{readingEntry.advisor_sections && Object.entries(readingEntry.advisor_sections).map(([key,content])=><section key={key} className="mt-6"><h3 className="mb-3 font-semibold">{{direction:"推荐的故事方向",hook:"核心看点",writing:"适合的写法",risks:"需要注意的问题"}[key]}</h3><NovelArchiveContent content={advisorMarkdown(typeof content === 'string' ? content : '')}/></section>)}</NovelReadingDialog>}
   </>;
   return <aside className={cardClass + " h-fit p-5 xl:sticky xl:top-24"}>
