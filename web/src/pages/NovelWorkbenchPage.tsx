@@ -1270,6 +1270,7 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   const [now, setNow] = useState(Date.now());
   const [readingEntry, setReadingEntry] = useState<NovelAssistantEntry | null>(null);
   const [scope,setScope] = useState<"book"|"volume"|"chapter">("chapter");
+  const [totalLibrarySize, setTotalLibrarySize] = useState(0);
   const mounted = useRef(true);
   const submitGuard = useRef(false);
   const running = entries.find((entry) => entry.status === "running");
@@ -1278,6 +1279,17 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   const lastAnswer = [...scopedEntries].reverse().find((entry) => entry.status === "completed");
   const busy = submitting || !!running;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  // Fetch total library size for advisor mode
+  useEffect(() => {
+    if (!advisorMode) return;
+    let active = true;
+    void listWritingLibrary().then(result => {
+      if (active) setTotalLibrarySize(result.items?.length || 0);
+    }).catch(() => {
+      if (active) setTotalLibrarySize(0);
+    });
+    return () => { active = false; };
+  }, [advisorMode]);
   useEffect(() => {
     try { localStorage.setItem(cacheKey, JSON.stringify(entries)); } catch { /* Server remains the durable source. */ }
   }, [cacheKey, entries]);
@@ -1366,7 +1378,7 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
       if (mounted.current) setSubmitting(false);
     }
   };
-  if (advisorMode) return <><NovelAdvisorConversation question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)}/>
+  if (advisorMode) return <><NovelAdvisorConversation question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)}/>
     {readingEntry && <NovelReadingDialog title="AI 小说顾问 · 讨论结果" onClose={()=>setReadingEntry(null)}><details className="mb-5 text-sm leading-7 text-muted-foreground"><summary className="cursor-pointer">查看本次讨论的原始想法</summary><p className="mt-3 whitespace-pre-wrap">{readingEntry.question}</p></details><NovelArchiveContent content={advisorMarkdown(readingEntry.reply || readingEntry.message || "暂无分析内容")}/>{readingEntry.advisor_sections && Object.entries(readingEntry.advisor_sections).map(([key,content])=><section key={key} className="mt-6"><h3 className="mb-3 font-semibold">{{direction:"推荐的故事方向",hook:"核心看点",writing:"适合的写法",risks:"需要注意的问题"}[key]}</h3><NovelArchiveContent content={advisorMarkdown(content)}/></section>)}</NovelReadingDialog>}
   </>;
   return <aside className={cardClass + " h-fit p-5 xl:sticky xl:top-24"}>

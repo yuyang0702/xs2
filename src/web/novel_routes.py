@@ -27,6 +27,7 @@ from src.config import DATA_DIR, WORKFLOW_WORKSPACES_DIR
 from .workflow_access import _ensure_http_mutation_allowed, _ensure_workflow_writable, _get_manager
 from .novel_assistant import NovelAssistantJobs
 from .novel_library import adopted_writing, enrich_candidates, fingerprint, profile_from_workspace, usage
+from .novel_mechanism_recommender import generate_recommendations_file
 from .novel_reference_choices import with_reference_choices
 from .novel_progress import progress
 from .novel_repair import repair_context, prepare_repair, ensure_idle, preserve_legacy_report
@@ -491,17 +492,91 @@ async def list_writing_library():
     return {"items": items}
 
 
+@router.get("/library/mechanism-recommendations")
+async def get_mechanism_recommendations(request: Request, workspace: str = "", adopted_mechanisms: str = ""):
+    """生成基于写法库的机制推荐"""
+    # 如果提供了 workspace，尝试从中读取已采用的机制
+    adopted = []
+    if workspace:
+        try:
+            manager = _get_manager(request)
+            root = manager._ws_manager.resolve_workflow_workspace("xs2-novel-flywheel", override=workspace).resolve()
+            active_context = root / "learning/active_context.md"
+            if active_context.is_file():
+                content = active_context.read_text(encoding="utf-8")
+                # 从 markdown 中提取机制名（每个## 开头的行就是一个机制）
+                for line in content.split('\n'):
+                    if line.startswith('## '):
+                        mechanism = line.replace('## ', '').strip()
+                        if mechanism:
+                            adopted.append(mechanism)
+        except Exception:
+            pass
+
+    # 如果通过查询参数提供了，使用参数中的
+    if adopted_mechanisms:
+        try:
+            adopted = json.loads(adopted_mechanisms)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    with _lock:
+        _library_root.mkdir(parents=True, exist_ok=True)
+        recommendations = generate_recommendations_file(_library_root, adopted or None)
+
+    return recommendations
+
+
 @router.get("/library/{library_id}")
-async def get_writing_library_item(library_id: str):
+async def get_writing_library_item(library_id: str, request: Request, workspace: str = ""):
     folder = library_path(library_id)
     manifest = read_json_file(folder / "manifest.json", None)
     if not isinstance(manifest, dict):
         raise HTTPException(404, "写法库条目不存在")
-    return {
+
+    result = {
         "manifest": manifest,
         "profile": read_json_file(folder / "profile.json", {}),
         "candidates": with_reference_choices(read_json_file(folder / "candidates.json", {"candidates": []})),
     }
+
+    # 如果提供了 workspace，计算本书的使用情况
+    if workspace:
+        try:
+            manager = _get_manager(request)
+            root = manager._ws_manager.resolve_workflow_workspace("xs2-novel-flywheel", override=workspace).resolve()
+
+            # 读取本书的 active_context.md
+            active_context_path = root / "learning/active_context.md"
+            if active_context_path.is_file():
+                active_content = active_context_path.read_text(encoding="utf-8")
+                adopted_mechanisms = []
+                for line in active_content.split('\n'):
+                    if line.startswith('## '):
+                        mechanism = line.replace('## ', '').strip()
+                        if mechanism:
+                            adopted_mechanisms.append(mechanism)
+
+                # 检查这个库的候选中有哪些被采用了
+                adopted_from_this_lib = []
+                for candidate in result["candidates"].get("candidates", []):
+                    mechanism = candidate.get("mechanism", "")
+                    if mechanism in adopted_mechanisms:
+                        adopted_from_this_lib.append({
+                            "candidate_id": candidate.get("candidate_id", ""),
+                            "mechanism": mechanism
+                        })
+
+                result["adopted_in_current_book"] = {
+                    "workspace": workspace,
+                    "adopted_count": len(adopted_from_this_lib),
+                    "mechanisms_used": adopted_from_this_lib,
+                    "adoption_date": root.stat().st_mtime if root.exists() else None
+                }
+        except Exception:
+            pass
+
+    return result
 
 
 @router.get("/library-usage")

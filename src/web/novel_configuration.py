@@ -83,13 +83,17 @@ CONFIGURATION_PROMPT = (
 )
 
 
-ADVISOR_PROMPT = CONFIGURATION_PROMPT.replace('本次用户选择了“分析并完善设置”。', '本次用户正在与小说顾问讨论方向。') + (
+ADVISOR_PROMPT = CONFIGURATION_PROMPT.replace('本次用户选择了”分析并完善设置”。', '本次用户正在与小说顾问讨论方向。') + (
     '本次是正式创作前的小说顾问交流，优先判断这本书写什么、主要看点是什么、适合怎么写。'
     '除reply和suggestions外，JSON还必须包含advisor_sections对象，其四个键均为中文Markdown字符串：'
     'direction（推荐的故事方向，具体主角、目标与故事起点，可给少量备选并明确推荐），'
     'hook（核心看点和读者期待，人物的独立欲望与选择），'
     'writing（字数、视角、节奏、因果递进冲突与伏笔，解释为什么适合），'
-    'risks（创意薄弱处、规则矛盾、风格适配风险与处理建议）。'
+    'risks（创意薄弱处、规则矛盾、风格适配风险与处理建议），'
+    'mechanism_recommendations（基于故事方向推荐的写法机制及其用法，JSON结构：'
+    '{“adopted_from_library”:[{“mechanism”:”机制名”,”usage_in_story”:”在此故事中的具体用法”,”priority”:”HIGH/MEDIUM/LOW”,”chapter_placement”:”第几章”}],'
+    '”new_mechanisms”:[{“mechanism”:”机制名”,”reason”:”为什么推荐这个新机制”,”synergy_with”:[“关联机制1”,”机制2”],”priority”:”HIGH/MEDIUM”}],'
+    '”avoid_combinations”:[{“a”:”机制A”,”b”:”机制B”,”reason”:”为什么不适合组合”}]})。'
     'reply先直接回应用户最新问题或追问，再给简短结论；四个分区补充相应细节，避免重复全文。'
     '初次方向判断保持精炼：reply约100字，四个分区合计约1500字；参数理由简短。'
     '不要把用户整份设定抄进建议参数，原始设定会另外完整传给创作流程。'
@@ -102,15 +106,29 @@ ADVISOR_PROMPT = CONFIGURATION_PROMPT.replace('本次用户选择了“分析并
 )
 
 
-def parse_advisor(text: str, mode: str) -> tuple[str, list[dict], dict[str, str]]:
+def parse_advisor(text: str, mode: str) -> tuple[str, list[dict], dict[str, str | dict]]:
     reply, suggestions = parse_configuration(text, mode)
     raw = re.sub(r'^```(?:json)?\s*', '', text.strip())
     raw = re.sub(r'\s*```$', '', raw)
-    sections = json.loads(raw).get('advisor_sections')
+    data = json.loads(raw)
+    sections = data.get('advisor_sections')
     keys = ('direction', 'hook', 'writing', 'risks')
     if not isinstance(sections, dict) or any(
         not isinstance(sections.get(key), str) or not sections[key].strip() or len(sections[key]) > 14000
         for key in keys
     ):
         raise ValueError('missing adviser sections')
-    return reply, suggestions, {key: sections[key].strip() for key in keys}
+    result = {key: sections[key].strip() for key in keys}
+
+    # 提取 mechanism_recommendations (可选字段)
+    mechanism_recs = sections.get('mechanism_recommendations')
+    if isinstance(mechanism_recs, (dict, str)):
+        if isinstance(mechanism_recs, str):
+            try:
+                mechanism_recs = json.loads(mechanism_recs)
+            except (json.JSONDecodeError, TypeError):
+                mechanism_recs = None
+        if isinstance(mechanism_recs, dict):
+            result['mechanism_recommendations'] = mechanism_recs
+
+    return reply, suggestions, result

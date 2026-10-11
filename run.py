@@ -12,6 +12,28 @@ sys.path.insert(0, str(Path(__file__).parent))
 npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
 
 
+def _check_nodejs_available():
+    """检查 Node.js 是否可用"""
+    import subprocess
+    try:
+        # 尝试多个可能的 node 命令
+        node_cmds = ["node", "node.exe", "nodejs"]
+        for cmd in node_cmds:
+            try:
+                result = subprocess.run(
+                    [cmd, "--version"],
+                    capture_output=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    return True
+            except:
+                continue
+        return False
+    except:
+        return False
+
+
 def _build_frontend_if_needed():
     """检测前端源码是否比 dist 更新，如果是则自动构建。"""
     import subprocess, os
@@ -24,32 +46,89 @@ def _build_frontend_if_needed():
     if not src_dir.exists():
         return  # 没有前端源码，跳过
 
-    # 如果 dist 不存在，必须构建
-    needs_build = not dist_dir.exists()
-
-    if not needs_build:
-        # 比较 src 最新修改时间 vs dist/index.html
-        dist_marker = dist_dir / "index.html"
-        if not dist_marker.exists():
-            needs_build = True
-        else:
-            dist_mtime = dist_marker.stat().st_mtime
-            for f in src_dir.rglob("*"):
-                if f.is_file() and f.stat().st_mtime > dist_mtime:
-                    needs_build = True
-                    break
-
-    if not needs_build:
+    # 如果 dist 存在且有内容，跳过构建
+    if dist_dir.exists() and (dist_dir / "index.html").exists():
+        print("  ✅ 前端已构建，跳过")
         return
 
-    # 检查 node_modules 是否存在
-    if not (web_dir / "node_modules").exists():
-        print("  📦 安装前端依赖...")
-        subprocess.run([npm_cmd, "install"], cwd=str(web_dir), check=True)
+    print("  📦 检测前端环境...")
 
-    print("  🔨 前端源码有更新，正在构建...")
-    subprocess.run([npm_cmd, "run", "build"], cwd=str(web_dir), check=True)
-    print("  ✅ 前端构建完成\n")
+    # 检查 Node.js 是否可用
+    if not _check_nodejs_available():
+        print("  ⚠️  Node.js 未安装或不在 PATH 中")
+        print("  ℹ️  前端功能将不可用（仅后端API模式）")
+        print("  ℹ️  如需完整功能，请安装 Node.js: https://nodejs.org/")
+        print("  ℹ️  安装后重新运行启动脚本\n")
+        return
+
+    # 检查 npm 是否可用
+    try:
+        result = subprocess.run(
+            [npm_cmd, "--version"],
+            capture_output=True,
+            timeout=5
+        )
+        if result.returncode != 0:
+            raise Exception("npm not available")
+    except:
+        print("  ⚠️  npm 不可用")
+        print("  ℹ️  前端功能将不可用（仅后端API模式）\n")
+        return
+
+    print("  🔄 自动构建前端...")
+
+    try:
+        # 检查 node_modules 是否存在
+        if not (web_dir / "node_modules").exists():
+            print("  📦 安装前端依赖（首次运行可能需要几分钟）...")
+            result = subprocess.run(
+                [npm_cmd, "install"],
+                cwd=str(web_dir),
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=600  # 10分钟超时
+            )
+            if result.returncode != 0:
+                print(f"  ⚠️  前端依赖安装失败")
+                stderr = result.stderr[:500] if result.stderr else ""
+                if stderr:
+                    print(f"  错误信息: {stderr}")
+                print("  ℹ️  服务将以纯后端模式启动")
+                print("  ℹ️  故障排除:")
+                print("      1. 检查网络连接")
+                print("      2. 尝试使用国内镜像: npm config set registry https://registry.npmmirror.com")
+                print("      3. 手动执行: cd web && npm install\n")
+                return
+
+        print("  🔨 构建前端（可能需要1-2分钟）...")
+        result = subprocess.run(
+            [npm_cmd, "run", "build"],
+            cwd=str(web_dir),
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=300  # 5分钟超时
+        )
+
+        if result.returncode == 0:
+            print("  ✅ 前端构建完成\n")
+        else:
+            print(f"  ⚠️  前端构建失败，服务将以纯后端模式启动")
+            stderr = result.stderr[:500] if result.stderr else ""
+            if stderr:
+                print(f"  错误信息: {stderr}")
+            print("  ℹ️  手动构建: cd web && npm run build\n")
+
+    except subprocess.TimeoutExpired:
+        print(f"  ⚠️  前端构建超时")
+        print("  ℹ️  服务将以纯后端模式启动")
+        print("  ℹ️  可手动构建: cd web && npm install && npm run build\n")
+    except Exception as e:
+        print(f"  ⚠️  前端构建异常: {str(e)[:100]}")
+        print("  ℹ️  服务将以纯后端模式启动\n")
 
 
 def _check_and_install_plugins():

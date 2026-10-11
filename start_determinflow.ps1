@@ -73,7 +73,16 @@ if (-not (Test-Path $modelCfg)) {
 
 # Start service
 Write-Host "Starting service..." -ForegroundColor Cyan
-$proc = Start-Process -FilePath $venvPython -ArgumentList @("run.py") -WorkingDirectory $Root -PassThru
+
+# Create a log file for debugging
+$logFile = Join-Path $Root "logs\startup_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+$logDir = Split-Path -Parent $logFile
+if (-not (Test-Path $logDir)) {
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+}
+
+# Start process and capture output
+$proc = Start-Process -FilePath $venvPython -ArgumentList @("run.py") -WorkingDirectory $Root -NoNewWindow -RedirectStandardOutput $logFile -PassThru
 
 # Wait for service
 $ready = $false
@@ -81,6 +90,9 @@ for ($i = 0; $i -lt 180; $i++) {
     Start-Sleep -Seconds 1
     if ($proc.HasExited) {
         Write-Host "ERROR: Service failed to start (exit code $($proc.ExitCode))" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Startup log:" -ForegroundColor Yellow
+        Get-Content $logFile -Tail 50 | ForEach-Object { Write-Host $_ }
         exit 1
     }
     try {

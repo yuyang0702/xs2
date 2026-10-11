@@ -496,7 +496,17 @@ export type NovelAssistantEntry = {
   plot_options?: NovelPlotOption[];
   plot_receipts?: Record<string, { title: string; chapters: string[]; applied_at: string }>;
   integration_projects?: string[];
-  advisor_sections?: { direction: string; hook: string; writing: string; risks: string };
+  advisor_sections?: {
+    direction: string;
+    hook: string;
+    writing: string;
+    risks: string;
+    mechanism_recommendations?: {
+      adopted_from_library?: Array<{mechanism: string; usage_in_story: string; priority: string; chapter_placement: string}>;
+      new_mechanisms?: Array<{mechanism: string; reason: string; synergy_with: string[]; priority: string}>;
+      avoid_combinations?: Array<{a: string; b: string; reason: string}>;
+    };
+  };
   suggestions?: { key: string; label: string; value: string; reason: string }[];
   configuration_base?: { mode: string; values: Record<string, string>; has_story_facts?: boolean; advisor_brief?: string };
   chapter?: string;
