@@ -26,15 +26,17 @@
   "custom_sources": [
     {
       "id": "custom-xs2-local",
-      "name": "XS2 本地插件仓库",
+      "name": "XS2 本地插件仓库（优先）",
       "url": "file:///c/xs2/DeterminFlow-Plugins",
-      "ref": "main"
+      "ref": "main",
+      "priority": 100
     },
     {
-      "id": "custom-xs2-893834f3",
-      "name": "XS2 插件仓库",
+      "id": "custom-xs2-remote",
+      "name": "XS2 插件仓库（备用）",
       "url": "https://github.com/yuyang0702/xs2-plugins.git",
-      "ref": "main"
+      "ref": "main",
+      "priority": 50
     }
   ]
 }
