@@ -193,17 +193,46 @@ Write-Info "Checking and installing required plugins..."
 $setupPluginsScript = Join-Path $Root "setup_plugins.py"
 if (Test-Path $setupPluginsScript) {
     try {
-        $pluginCheckOutput = & $venvPython $setupPluginsScript 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        # 设置环境变量以支持 UTF-8
+        $env:PYTHONIOENCODING = "utf-8"
+
+        # 使用 -NoNewline 和适当的编码处理
+        $pluginCheckProcess = Start-Process -FilePath $venvPython `
+            -ArgumentList @($setupPluginsScript) `
+            -WorkingDirectory $Root `
+            -PassThru `
+            -RedirectStandardOutput (Join-Path $env:TEMP "plugin_check_output.txt") `
+            -RedirectStandardError (Join-Path $env:TEMP "plugin_check_error.txt") `
+            -NoNewWindow
+
+        $pluginCheckProcess.WaitForExit()
+
+        # 读取输出文件
+        $outputFile = Join-Path $env:TEMP "plugin_check_output.txt"
+        $errorFile = Join-Path $env:TEMP "plugin_check_error.txt"
+
+        if (Test-Path $outputFile) {
+            $output = Get-Content $outputFile -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($output) {
+                $output | ForEach-Object { Write-Host "  $_" }
+            }
+            Remove-Item $outputFile -Force -ErrorAction SilentlyContinue
+        }
+
+        if ($pluginCheckProcess.ExitCode -eq 0) {
             Write-Success "Plugin check completed successfully."
         } else {
-            Write-Host "Warning: Some plugins may not be available, but starting service anyway." -ForegroundColor Yellow
+            Write-Host "Warning: Plugin check returned code $($pluginCheckProcess.ExitCode)." -ForegroundColor Yellow
+            if (Test-Path $errorFile) {
+                $errorMsg = Get-Content $errorFile -Encoding UTF8 -ErrorAction SilentlyContinue
+                if ($errorMsg) {
+                    Write-Host "  Error details: $errorMsg" -ForegroundColor Yellow
+                }
+                Remove-Item $errorFile -Force -ErrorAction SilentlyContinue
+            }
         }
-        # 打印插件检查输出
-        $pluginCheckOutput | ForEach-Object { Write-Host "  $_" }
     } catch {
-        Write-Host "Warning: Plugin check script failed, but starting service anyway." -ForegroundColor Yellow
-        Write-Host "  Error: $_"
+        Write-Host "Warning: Plugin check script failed: $_" -ForegroundColor Yellow
     }
 } else {
     Write-Info "Plugin setup script not found, skipping plugin check."
