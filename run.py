@@ -55,6 +55,7 @@ def _build_frontend_if_needed():
 def _check_and_install_plugins():
     """检查并自动安装必需的插件"""
     import subprocess
+    import os
 
     root = Path(__file__).parent
     setup_plugins_script = root / "setup_plugins.py"
@@ -64,24 +65,33 @@ def _check_and_install_plugins():
 
     try:
         print("  📦 检查并安装必需的插件...")
+
+        # 设置环境变量，确保 Python 使用 UTF-8
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+
         result = subprocess.run(
             [sys.executable, str(setup_plugins_script)],
             cwd=str(root),
             capture_output=True,
             text=True,
+            encoding='utf-8',  # 明确指定 UTF-8 编码
+            env=env,
         )
 
         if result.stdout:
             for line in result.stdout.strip().split("\n"):
-                if line:
+                if line and line.strip():
                     print(f"    {line}")
 
-        if result.returncode != 0 and result.stderr:
-            print(f"    ⚠️  插件检查返回警告: {result.stderr}")
+        if result.returncode == 0:
+            # 成功
+            pass
+        elif result.stderr:
+            print(f"    ⚠️  插件检查提示: {result.stderr[:200]}")
 
     except Exception as e:
-        print(f"    ⚠️  插件检查失败: {e}")
-
+        print(f"    ⚠️  插件检查失败: {str(e)[:100]}")
 
 if __name__ == "__main__":
     import os

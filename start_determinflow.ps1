@@ -188,55 +188,10 @@ if (-not (Test-Path $modelConfig)) {
 }
 
 # === 自动检测和安装必需的插件 ===
-Write-Info "Checking and installing required plugins..."
+# 注意：插件检查在 run.py 中执行，这里不再重复调用
+# 这样可以避免 PowerShell 的编码问题
+Write-Info "Plugins will be checked during service startup..."
 
-$setupPluginsScript = Join-Path $Root "setup_plugins.py"
-if (Test-Path $setupPluginsScript) {
-    try {
-        # 设置环境变量以支持 UTF-8
-        $env:PYTHONIOENCODING = "utf-8"
-
-        # 使用 -NoNewline 和适当的编码处理
-        $pluginCheckProcess = Start-Process -FilePath $venvPython `
-            -ArgumentList @($setupPluginsScript) `
-            -WorkingDirectory $Root `
-            -PassThru `
-            -RedirectStandardOutput (Join-Path $env:TEMP "plugin_check_output.txt") `
-            -RedirectStandardError (Join-Path $env:TEMP "plugin_check_error.txt") `
-            -NoNewWindow
-
-        $pluginCheckProcess.WaitForExit()
-
-        # 读取输出文件
-        $outputFile = Join-Path $env:TEMP "plugin_check_output.txt"
-        $errorFile = Join-Path $env:TEMP "plugin_check_error.txt"
-
-        if (Test-Path $outputFile) {
-            $output = Get-Content $outputFile -Encoding UTF8 -ErrorAction SilentlyContinue
-            if ($output) {
-                $output | ForEach-Object { Write-Host "  $_" }
-            }
-            Remove-Item $outputFile -Force -ErrorAction SilentlyContinue
-        }
-
-        if ($pluginCheckProcess.ExitCode -eq 0) {
-            Write-Success "Plugin check completed successfully."
-        } else {
-            Write-Host "Warning: Plugin check returned code $($pluginCheckProcess.ExitCode)." -ForegroundColor Yellow
-            if (Test-Path $errorFile) {
-                $errorMsg = Get-Content $errorFile -Encoding UTF8 -ErrorAction SilentlyContinue
-                if ($errorMsg) {
-                    Write-Host "  Error details: $errorMsg" -ForegroundColor Yellow
-                }
-                Remove-Item $errorFile -Force -ErrorAction SilentlyContinue
-            }
-        }
-    } catch {
-        Write-Host "Warning: Plugin check script failed: $_" -ForegroundColor Yellow
-    }
-} else {
-    Write-Info "Plugin setup script not found, skipping plugin check."
-}
 
 Write-Info "Starting the local service."
 $process = Start-Process -FilePath $venvPython -ArgumentList @("run.py") -WorkingDirectory $Root -PassThru
