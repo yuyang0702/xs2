@@ -9,7 +9,7 @@
       "description": "小说写作、资料蒸馏、参考库管理、动态档案",
       "version": "1.0.0",
       "auto_enable": true,
-      "source": "custom-xs2-893834f3",
+      "source": "custom-xs2-local",
       "requested_ref": "main",
       "features": [
         "小说创作辅助",
