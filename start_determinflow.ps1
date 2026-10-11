@@ -8,10 +8,33 @@ function Write-Info([string]$Message) {
     Write-Host "[DeterminFlow] $Message" -ForegroundColor Cyan
 }
 
+function Write-Success([string]$Message) {
+    Write-Host "[DeterminFlow] $Message" -ForegroundColor Green
+}
+
+function Write-Error-Custom([string]$Message) {
+    Write-Host "[DeterminFlow] $Message" -ForegroundColor Red
+}
+
 function Test-Service([string]$Address) {
     try {
         $response = Invoke-WebRequest -Uri $Address -UseBasicParsing -TimeoutSec 2
         return $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
+    } catch {
+        return $false
+    }
+}
+
+function Test-DependenciesInstalled {
+    try {
+        $packages = @("openai", "fastapi", "langgraph")
+        foreach ($package in $packages) {
+            $result = & $venvPython -c "import $package" 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                return $false
+            }
+        }
+        return $true
     } catch {
         return $false
     }
@@ -76,18 +99,83 @@ if (-not (Test-Path $venvPython)) {
     throw "Virtual environment creation failed: $venvPython"
 }
 
+# === 自动检测并安装依赖 ===
+$requirements = Join-Path $Root "requirements.txt"
+$requirementsDev = Join-Path $Root "requirements-dev.txt"
 $dependencyMarker = Join-Path $Root ".venv\.determinflow-dependencies-ready"
-$requirements = Join-Path $Root "requirements.lock"
 
-if (-not (Test-Path $requirements)) {
-    Write-Host "Error: requirements.lock not found" -ForegroundColor Red
-    exit 1
-}
+Write-Info "Checking dependencies..."
 
-if (-not (Test-Path $dependencyMarker) -or (Get-Item $requirements).LastWriteTimeUtc -gt (Get-Item $dependencyMarker).LastWriteTimeUtc) {
-    Write-Info "Installing Python dependencies; the first run can take a few minutes."
-    & $venvPython -m pip install -r $requirements
-    Set-Content -Path $dependencyMarker -Value (Get-Date).ToUniversalTime().ToString("o") -Encoding UTF8
+# 检查 requirements.txt 和 requirements-dev.txt
+$hasRequirements = (Test-Path $requirements) -or (Test-Path $requirementsDev)
+
+if ($hasRequirements) {
+    $needsInstall = $false
+
+    # 检查依赖标记文件
+    if (-not (Test-Path $dependencyMarker)) {
+        $needsInstall = $true
+        Write-Info "Dependencies marker not found, installing dependencies."
+    } else {
+        # 检查依赖文件是否更新过
+        $markerTime = (Get-Item $dependencyMarker).LastWriteTimeUtc
+
+        if ((Test-Path $requirements) -and (Get-Item $requirements).LastWriteTimeUtc -gt $markerTime) {
+            $needsInstall = $true
+            Write-Info "requirements.txt has been updated, reinstalling dependencies."
+        }
+
+        if ((Test-Path $requirementsDev) -and (Get-Item $requirementsDev).LastWriteTimeUtc -gt $markerTime) {
+            $needsInstall = $true
+            Write-Info "requirements-dev.txt has been updated, reinstalling dependencies."
+        }
+
+        # 检查关键包是否已安装
+        if (-not (Test-DependenciesInstalled)) {
+            $needsInstall = $true
+            Write-Info "Some dependencies are missing, reinstalling."
+        }
+    }
+
+    if ($needsInstall) {
+        Write-Info "Installing Python dependencies; this may take a few minutes."
+
+        # 升级 pip
+        Write-Info "Upgrading pip..."
+        & $venvPython -m pip install --upgrade pip | Out-Null
+
+        # 安装主要依赖
+        if (Test-Path $requirements) {
+            Write-Info "Installing requirements.txt..."
+            & $venvPython -m pip install -r $requirements
+        }
+
+        # 安装开发依赖
+        if (Test-Path $requirementsDev) {
+            Write-Info "Installing requirements-dev.txt..."
+            & $venvPython -m pip install -r $requirementsDev
+        }
+
+        # 更新标记文件
+        Set-Content -Path $dependencyMarker -Value (Get-Date).ToUniversalTime().ToString("o") -Encoding UTF8
+        Write-Success "Dependencies installed successfully."
+    } else {
+        Write-Success "All dependencies are up to date."
+    }
+} else {
+    # 兼容旧的 requirements.lock 文件
+    $requirementsLock = Join-Path $Root "requirements.lock"
+
+    if (-not (Test-Path $requirementsLock)) {
+        Write-Host "Error: requirements.txt/requirements-dev.txt or requirements.lock not found" -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not (Test-Path $dependencyMarker) -or (Get-Item $requirementsLock).LastWriteTimeUtc -gt (Get-Item $dependencyMarker).LastWriteTimeUtc) {
+        Write-Info "Installing Python dependencies; the first run can take a few minutes."
+        & $venvPython -m pip install -r $requirementsLock
+        Set-Content -Path $dependencyMarker -Value (Get-Date).ToUniversalTime().ToString("o") -Encoding UTF8
+    }
 }
 
 if (-not (Test-Path (Join-Path $Root ".env"))) {
@@ -97,6 +185,28 @@ if (-not (Test-Path (Join-Path $Root ".env"))) {
 $modelConfig = Join-Path $Root "config\models_config.json"
 if (-not (Test-Path $modelConfig)) {
     Copy-Item (Join-Path $Root "config\models_config.example.json") $modelConfig
+}
+
+# === 自动检测和安装必需的插件 ===
+Write-Info "Checking and installing required plugins..."
+
+$setupPluginsScript = Join-Path $Root "setup_plugins.py"
+if (Test-Path $setupPluginsScript) {
+    try {
+        $pluginCheckOutput = & $venvPython $setupPluginsScript 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Plugin check completed successfully."
+        } else {
+            Write-Host "Warning: Some plugins may not be available, but starting service anyway." -ForegroundColor Yellow
+        }
+        # 打印插件检查输出
+        $pluginCheckOutput | ForEach-Object { Write-Host "  $_" }
+    } catch {
+        Write-Host "Warning: Plugin check script failed, but starting service anyway." -ForegroundColor Yellow
+        Write-Host "  Error: $_"
+    }
+} else {
+    Write-Info "Plugin setup script not found, skipping plugin check."
 }
 
 Write-Info "Starting the local service."

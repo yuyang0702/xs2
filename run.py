@@ -52,6 +52,37 @@ def _build_frontend_if_needed():
     print("  ✅ 前端构建完成\n")
 
 
+def _check_and_install_plugins():
+    """检查并自动安装必需的插件"""
+    import subprocess
+
+    root = Path(__file__).parent
+    setup_plugins_script = root / "setup_plugins.py"
+
+    if not setup_plugins_script.exists():
+        return
+
+    try:
+        print("  📦 检查并安装必需的插件...")
+        result = subprocess.run(
+            [sys.executable, str(setup_plugins_script)],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+        )
+
+        if result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                if line:
+                    print(f"    {line}")
+
+        if result.returncode != 0 and result.stderr:
+            print(f"    ⚠️  插件检查返回警告: {result.stderr}")
+
+    except Exception as e:
+        print(f"    ⚠️  插件检查失败: {e}")
+
+
 if __name__ == "__main__":
     import os
     import uvicorn
@@ -66,6 +97,7 @@ if __name__ == "__main__":
             output_stream.reconfigure(encoding="utf-8", errors="replace")
 
     _build_frontend_if_needed()
+    _check_and_install_plugins()
 
     # 日志级别唯一入口：需要诊断日志时设置 LOG_LEVEL=DEBUG
     os.environ.setdefault("LOG_LEVEL", "INFO")
