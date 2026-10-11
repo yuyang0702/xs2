@@ -78,6 +78,12 @@ if (-not (Test-Path $venvPython)) {
 
 $dependencyMarker = Join-Path $Root ".venv\.determinflow-dependencies-ready"
 $requirements = Join-Path $Root "requirements.lock"
+
+if (-not (Test-Path $requirements)) {
+    Write-Host "Error: requirements.lock not found" -ForegroundColor Red
+    exit 1
+}
+
 if (-not (Test-Path $dependencyMarker) -or (Get-Item $requirements).LastWriteTimeUtc -gt (Get-Item $dependencyMarker).LastWriteTimeUtc) {
     Write-Info "Installing Python dependencies; the first run can take a few minutes."
     & $venvPython -m pip install -r $requirements
