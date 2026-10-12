@@ -172,6 +172,48 @@ def _check_and_install_plugins():
     except Exception as e:
         print(f"    ⚠️  插件检查失败: {str(e)[:100]}")
 
+
+def _check_humanware_engine():
+    """检查 Humanware Engine 状态并提示"""
+    root = Path(__file__).parent
+
+    # 检查 Humanware Engine 是否存在
+    humanware_path = root / "data" / "plugins" / "checkouts" / "xs2-novel-flywheel"
+
+    # 查找实际的插件目录（因为有 hash 值）
+    if humanware_path.exists():
+        for checkout_dir in humanware_path.iterdir():
+            if checkout_dir.is_dir():
+                engine_path = checkout_dir / "resources" / "script-library" / "xs2" / "humanware_engine"
+                if engine_path.exists():
+                    # Humanware Engine 已安装
+                    print("  ✨ Humanware Engine 已就绪")
+                    print("     让你的小说更有人味！")
+
+                    # 检查是否已初始化
+                    meta_dir = root / "meta"
+                    if meta_dir.exists():
+                        voice_file = meta_dir / "character_voices.json"
+                        if voice_file.exists():
+                            print("     ✅ 系统已初始化")
+                        else:
+                            print("     ℹ️  首次使用？运行: python humanware_quickstart.py --action init")
+                    else:
+                        print("     ℹ️  首次使用？运行: python humanware_quickstart.py --action init")
+
+                    print()
+                    return
+
+    # Humanware Engine 未找到，显示安装提示
+    quickstart = root / "humanware_quickstart.py"
+    demo = root / "humanware_demo.py"
+
+    if quickstart.exists() and demo.exists():
+        print("  ℹ️  Humanware Engine 工具已就绪")
+        print("     查看效果: python humanware_demo.py")
+        print("     快速启动: python humanware_quickstart.py --action init")
+        print()
+
 if __name__ == "__main__":
     import os
     import uvicorn
@@ -187,6 +229,7 @@ if __name__ == "__main__":
 
     _build_frontend_if_needed()
     _check_and_install_plugins()
+    _check_humanware_engine()
 
     # 日志级别唯一入口：需要诊断日志时设置 LOG_LEVEL=DEBUG
     os.environ.setdefault("LOG_LEVEL", "INFO")

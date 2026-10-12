@@ -44,14 +44,28 @@ export default function NovelAdvisorConversation({
   const hasMechanismRecommendations = !!(latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length);
   const quick = (value: string) => { onQuestion(value); setFollowup(false); input.current?.focus(); };
 
+  // 调试日志
+  console.log('[NovelAdvisorConversation] 按钮显示条件:', {
+    hasMechanismRecommendations,
+    hasOnQuickAdopt: !!onQuickAdopt,
+    hasOnManualSelect: !!onManualSelect,
+    hasAdopted,
+    adoptedCount,
+    showButton: hasMechanismRecommendations && !!onQuickAdopt && !hasAdopted,
+    mechanismCount: latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length || 0
+  });
+
   const handleQuickAdopt = async (skipCompatibility: boolean) => {
+    console.log('[handleQuickAdopt] 开始快速采用，参数:', { skipCompatibility, hasLatest: !!latest, hasOnQuickAdopt: !!onQuickAdopt });
     if (!latest || !onQuickAdopt) return;
     setShowQuickAdoptDialog(false);
     setQuickAdopting(true);
     try {
       const result = await onQuickAdopt(latest);
+      console.log('[handleQuickAdopt] 快速采用结果:', result);
       setNotice(result.message);
     } catch (error) {
+      console.error('[handleQuickAdopt] 快速采用失败:', error);
       setNotice(`快速采用失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setQuickAdopting(false);
@@ -175,6 +189,7 @@ export default function NovelAdvisorConversation({
               </button>
               <button
                 onClick={() => {
+                  console.log('[手动选择按钮] 点击了，调用 onManualSelect');
                   setShowQuickAdoptDialog(false);
                   onManualSelect?.();
                 }}
@@ -199,7 +214,10 @@ export default function NovelAdvisorConversation({
         {hasMechanismRecommendations && onQuickAdopt && !hasAdopted && (
           <button
             disabled={disabled || quickAdopting}
-            onClick={() => setShowQuickAdoptDialog(true)}
+            onClick={() => {
+              console.log('[快速采用按钮] 点击了，准备显示对话框');
+              setShowQuickAdoptDialog(true);
+            }}
             className="flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50"
           >
             {quickAdopting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
