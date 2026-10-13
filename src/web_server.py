@@ -57,6 +57,7 @@ from src.web.novel_routes import router as novel_console_router
 from src.web.workflow_node_control_routes import router as workflow_node_control_router
 from src.web.attachment_routes import router as attachment_router
 from src.web.mention_routes import router as mention_router
+from src.web.humanware_routes import router as humanware_router
 from src.web.ws_handlers import handle_chat_ws, handle_events_ws
 from src.account.routes import router as account_router
 from src.skill_marketplace.routes import router as resource_marketplace_router
@@ -837,6 +838,7 @@ def create_app(extension_manager: ExtensionManager | None = None) -> FastAPI:
     application.include_router(workflow_node_control_router)
     application.include_router(attachment_router)
     application.include_router(mention_router)
+    application.include_router(humanware_router)
     application.include_router(account_router)
     application.include_router(resource_marketplace_router)
     application.include_router(settings_router)

@@ -180,14 +180,14 @@ Write-Host ""
 Write-Host "[6/6] Starting service..." -ForegroundColor Yellow
 Write-Host ""
 
-# 显示 Humanware Engine 横幅
+# Show Humanware Engine banner
 $humanwareBannerScript = Join-Path $Root "scripts\humanware_banner.ps1"
 if (Test-Path $humanwareBannerScript) {
     try {
         . $humanwareBannerScript
         Show-HumanwareBanner -RootPath $Root
     } catch {
-        # 如果横幅脚本失败，静默继续
+        # Silent continue if banner script fails
     }
 }
 
