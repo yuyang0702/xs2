@@ -49,11 +49,23 @@ def main():
     if token:
         add_readiness_route(app, token)
     print(f"DeterminFlow: http://localhost:{port}", flush=True)
-    uvicorn.run(
+    config = uvicorn.Config(
         app, host=host, port=port, reload=False, log_level="info",
         limit_concurrency=int(os.getenv("UVICORN_LIMIT_CONCURRENCY", "200")),
         backlog=int(os.getenv("UVICORN_BACKLOG", "2048")),
     )
+    server = uvicorn.Server(config)
+    secret = os.getenv('DETERMINFLOW_STARTUP_SECRET')
+    if token and secret:
+        from src.startup_control import install_control
+        from src.startup_identity import StartupProfile
+        profile = StartupProfile.from_root(ROOT)
+        if os.getenv('DETERMINFLOW_STARTUP_PROFILE_ID') != profile.profile_id:
+            raise RuntimeError('启动配置身份已变化，请重新启动。')
+        install_control(app, root=ROOT, profile_id=profile.profile_id, token=token,
+                        secret=secret, guard_file=profile.guard_file(token),
+                        shutdown=lambda: setattr(server, 'should_exit', True))
+    server.run()
     return 0
 
 

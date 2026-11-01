@@ -6,6 +6,7 @@ import {
 } from "../lib/api";
 import { useDialog } from "./ui/use-dialog";
 import WritingLibraryReader from "./WritingLibraryReader";
+import WritingLibraryViewpoints from "./WritingLibraryViewpoints";
 
 type Props = {
   project: { values: Record<string, string> };
@@ -144,7 +145,8 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
     <WritingLibraryReader key={readingId} id={readingId} usage={usageById[readingId]} attaching={busy || usageLoading} onBack={() => { if (!operation.current) setReadingId(""); }} onAttach={() => void attach(readingId)} onUpdate={() => void attach(readingId, true)} onConfirm={() => { if (!operation.current) onConfirm(usageById[readingId]?.status === "adopted"); }} />
   </div>;
 
-  const pov = project.values.narrative_pov === "first_person" ? "first_person" : "third_person";
+  const pov = project.values.narrative_pov || "";
+  const knownPov = ["first_person", "second_person", "third_person"].includes(pov);
   const genre = (project.values.genre || "").trim();
   return <div className="space-y-5">
     <header>
@@ -179,7 +181,8 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
     {notices}
     {!loading && !items.length && !error && <div className="rounded-2xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">还没有共享写法。完成一次独立资料蒸馏后，会自动保存到这里。</div>}
     <div className="grid gap-4 md:grid-cols-2">{items.map(item => {
-      const match = (item.pov.length === 0 || item.pov.includes(pov)) && (!genre || item.genres.length === 0 || item.genres.some(tag => genre.includes(tag) || tag.includes(genre)));
+      const applicabilityKnown = item.pov_metadata?.target_status === "known";
+      const match = knownPov && applicabilityKnown && item.pov_metadata!.target_pov.includes(pov) && (!genre || item.genres.length === 0 || item.genres.some(tag => genre.includes(tag) || tag.includes(genre)));
       const usage = usageById[item.id];
       const attached = !!usage && usage.status !== "available";
       return <article key={item.id} className={`rounded-2xl border bg-card p-5 shadow-sm ${selected.includes(item.id) ? "border-primary/60" : "border-border"}`}>
@@ -190,7 +193,8 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
           </label>
           <button aria-label={`删除写法：${item.name}`} title="删除这份写法" disabled={busy} onClick={() => void remove([item.id])} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"><Trash2 className="h-4 w-4" /></button>
         </div>
-        <div className="mt-4 flex items-start gap-2"><span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-xs">{!item.pov.length ? "视角未标注" : match ? "初步匹配" : "需要适配"}</span><p className="text-xs leading-6 text-muted-foreground">{match ? "可作为候选来源，风格、写法与冲突的适用性仍需逐条确认。" : `当前作品是${pov === "first_person" ? "第一" : "第三"}人称，库中视角为 ${item.pov.map(value => value === "first_person" ? "第一人称" : value === "third_person" ? "第三人称" : "其他视角").join("、") || "未标注"}，助手会提示风险。`}</p></div>
+        <WritingLibraryViewpoints metadata={item.pov_metadata} />
+        <div className="mt-4 flex items-start gap-2"><span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-xs">{!knownPov ? "本书视角待设置" : !applicabilityKnown ? "适用视角待核对" : match ? "初步匹配" : "需要适配"}</span><p className="text-xs leading-6 text-muted-foreground">{match ? "可作为候选来源，风格、写法与冲突的适用性仍需逐条确认。" : "请结合本书视角与题材逐条检查写法；原作叙事视角与写法适用视角分别记录。"}</p></div>
         <button disabled={busy} onClick={() => { setReadingId(item.id); setFeedback(""); setError(""); }} className="mt-4 w-full rounded-xl border border-border px-3 py-2.5 text-sm hover:bg-secondary/60 disabled:opacity-50">查看具体写法</button>
         <button disabled={busy || usageLoading || attached} onClick={() => void attach(item.id)} className="mt-4 w-full rounded-xl bg-primary px-3 py-2.5 text-sm text-primary-foreground disabled:opacity-60">{attachingId === item.id ? "正在加入…" : usageLoading ? "采用状态待核对" : usage?.status === "adopted" ? `已采用：风格 ${usage.style_count || 0} · 写法 ${usage.selected_count} · 冲突 ${usage.conflict_count || 0}` : attached ? "已加入本书候选，待确认" : "加入本书候选"}</button>
         {usage?.update_available && <button disabled={busy || usageLoading} onClick={() => void attach(item.id, true)} className="mt-3 text-sm text-primary disabled:opacity-50">更新本书候选与分析</button>}

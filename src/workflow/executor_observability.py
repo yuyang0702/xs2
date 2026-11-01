@@ -18,6 +18,9 @@ from .executor_protocol import STATUS_OPERATION
 logger = logging.getLogger(__name__)
 
 STATUS_RPC_TIMEOUT_SECONDS = 2.0
+# Restart checks must tolerate Windows disk/UI polling contention while still
+# treating a missing reply as unknown. Dashboard polling keeps its short budget.
+RESTART_STATUS_RPC_TIMEOUT_SECONDS = 8.0
 SAFE_REASONS = frozenset({
     "inline",
     "pool_unavailable",
@@ -268,11 +271,13 @@ async def collect_workflow_executor_status(
     *,
     mode: str | None = None,
     configured_count: int | None = None,
+    strict_activity: bool = False,
 ) -> dict[str, Any]:
     """Return a fail-closed Controller snapshot. Never raises to the HTTP layer."""
     try:
         return await _collect_workflow_executor_status(
             pool, mode=mode, configured_count=configured_count,
+            strict_activity=strict_activity,
         )
     except Exception:
         logger.warning("Workflow Executor 状态采集失败", exc_info=True)
@@ -290,6 +295,7 @@ async def _collect_workflow_executor_status(
     *,
     mode: str | None,
     configured_count: int | None,
+    strict_activity: bool = False,
 ) -> dict[str, Any]:
     resolved = _resolved_mode(mode)
     count = _configured_count(pool, configured_count)
@@ -306,7 +312,7 @@ async def _collect_workflow_executor_status(
             raw = snapshot_fn()
             if inspect.isawaitable(raw):
                 raw = await raw
-            return _project_pool_snapshot(raw, configured_count=count)
+            return _project_pool_snapshot(raw, configured_count=count, strict_activity=strict_activity)
         except Exception:
             logger.warning(
                 "pool.status_snapshot 失败，回退到 identities/client_for",
@@ -322,7 +328,7 @@ async def _collect_workflow_executor_status(
 
     pids = _safe_member_pids(pool)
     gathered = await asyncio.gather(
-        *(_collect_member(pool, identity, pids) for identity in identities),
+        *(_collect_member(pool, identity, pids, strict_activity=strict_activity) for identity in identities),
         return_exceptions=True,
     )
     members: list[dict[str, Any]] = []
@@ -363,6 +369,8 @@ async def _collect_member(
     pool: Any,
     identity: Any,
     pids: Mapping[str, int | None],
+    *,
+    strict_activity: bool = False,
 ) -> dict[str, Any]:
     executor_id = getattr(identity, "executor_id", "")
     expected_epoch = getattr(identity, "epoch", "")
@@ -378,6 +386,9 @@ async def _collect_member(
             raw = snapshot_fn()
             if inspect.isawaitable(raw):
                 raw = await raw
+            if strict_activity and not _activity_count_known(raw):
+                return _degraded_member(executor_id=executor_id, epoch=expected_epoch,
+                                        pid=pids.get(executor_id), reason="invalid_status")
             member = _reconcile_member(sanitize_member_status(raw), identity, pids)
             return _merge_readiness(member, readiness)
         except Exception:
@@ -404,10 +415,13 @@ async def _collect_member(
         client = client_for(executor_id)
         raw = await asyncio.wait_for(
             client.call(STATUS_OPERATION),
-            timeout=STATUS_RPC_TIMEOUT_SECONDS,
+            timeout=(RESTART_STATUS_RPC_TIMEOUT_SECONDS if strict_activity else STATUS_RPC_TIMEOUT_SECONDS),
         )
     except Exception:
         return fallback
+    if strict_activity and not _activity_count_known(raw):
+        return _degraded_member(executor_id=executor_id, epoch=expected_epoch,
+                                pid=pids.get(executor_id), reason="invalid_status")
     member = _reconcile_member(sanitize_member_status(raw), identity, pids)
     return _merge_readiness(member, readiness)
 
@@ -490,6 +504,7 @@ def _project_pool_snapshot(
     raw: Any,
     *,
     configured_count: int,
+    strict_activity: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         return process_pool_unavailable_status(
@@ -499,7 +514,10 @@ def _project_pool_snapshot(
     members = []
     if isinstance(members_raw, list):
         for item in members_raw:
-            members.append(sanitize_member_status(item))
+            if strict_activity and not _activity_count_known(item):
+                members.append(_degraded_member(reason="invalid_status"))
+            else:
+                members.append(sanitize_member_status(item))
     event_bridge = raw.get("event_bridge")
     if not isinstance(event_bridge, Mapping):
         event_bridge = controller_event_bridge_counters.snapshot()
@@ -530,6 +548,13 @@ def _project_pool_snapshot(
     elif degraded:
         snapshot["reason"] = _first_degraded_reason(members)
     return snapshot
+
+
+def _activity_count_known(raw: Any) -> bool:
+    if not isinstance(raw, Mapping):
+        return False
+    count = raw.get("active_task_count")
+    return isinstance(count, int) and not isinstance(count, bool) and count >= 0
 
 
 def _first_degraded_reason(members: list[dict[str, Any]]) -> str:

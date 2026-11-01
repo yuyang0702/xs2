@@ -9,6 +9,7 @@ import sqlite3
 import uuid
 from collections.abc import Mapping
 from typing import Any
+from src.runtime_admission import admitted_activity
 
 from src.memory.contracts import (
     SCOPE_USER,
@@ -54,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryJobMixin:
+    @admitted_activity("记忆后台任务正在处理。", closed_result=0)
     async def process_due_jobs(self, *, force: bool = False) -> int:
         processed = 0
         attempted: set[str] = set()

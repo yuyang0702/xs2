@@ -23,9 +23,40 @@ export function repairNodeModels(definition: WorkflowDefinition, model: string) 
     !node.model_override && !node.var_bindings?.model_override?.var_key).map(node => [node.id, model]));
 }
 
-export function recordedTaskModels(task: WorkflowTask | null | undefined): Array<{ id: string; models: string[]; status: string }> {
+type RecordedUsageState = {
+  token_usage_calls?: Array<{ model_id?: string; provider?: string; model?: string }>;
+  token_usage?: Record<string, { call_count?: number; total_tokens?: number }>;
+  child_states?: Record<string, RecordedUsageState>;
+};
+
+export type TaskModelRecord = { id: string; models: string[]; status: string; hasUnrecordedCalls: boolean };
+
+function recordedModel(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const model = value.trim();
+  return model && model.split(":").every(part => part && part.toLowerCase() !== "unknown") ? model : "";
+}
+
+export function recordedTaskModels(task: WorkflowTask | null | undefined): TaskModelRecord[] {
   return Object.entries(task?.node_states || {}).map(([id, state]) => {
-    const calls = (state as unknown as { token_usage_calls?: Array<{ model_id?: string; model?: string }> }).token_usage_calls || [];
-    return { id, status: state.status, models: [...new Set(calls.map(call => call.model_id || call.model || "").filter(Boolean))] };
+    const models = new Set<string>();
+    let hasUnrecordedCalls = false;
+    function collect(row: RecordedUsageState) {
+      const calls = row.token_usage_calls || [];
+      for (const call of calls) {
+        const id = recordedModel(call.model_id), provider = recordedModel(call.provider), model = recordedModel(call.model);
+        // Old ledgers sometimes omitted model_id but retained both actual fields.
+        // Never fill gaps from today's workflow settings.
+        const identity = id.includes(":") ? id : provider && model ? `${provider}:${model}` : id || model;
+        if (identity) models.add(identity);
+        else hasUnrecordedCalls = true;
+      }
+      if (!calls.length && Object.values(row.token_usage || {}).some(usage => (usage.call_count || usage.total_tokens || 0) > 0)) {
+        hasUnrecordedCalls = true;
+      }
+      for (const child of Object.values(row.child_states || {})) collect(child);
+    }
+    collect(state as unknown as RecordedUsageState);
+    return { id, status: state.status, models: [...models], hasUnrecordedCalls };
   });
 }

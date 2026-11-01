@@ -37,12 +37,13 @@ async def _run(args: argparse.Namespace) -> None:
     # Import only after the role is fixed. web_server creates its application at
     # module import time and the lifespan uses this role to disable Controller
     # responsibilities.
-    from src.config import DATA_DIR
+    from src.config import DATA_DIR, WORKFLOW_EXECUTOR_COUNT
     from src.web_server import app, lifespan
     from src.web.event_bus import event_bus
     from src.workflow.executor_events import ExecutorEventForwarder
     from src.workflow.executor_lease import ExecutorProcessLease
     from src.workflow.executor_pool import executor_init_lease_path
+    from src.workflow.executor_timing import executor_boot_timeout
     from src.workflow.executor_server import WorkflowExecutorServer
 
     identity = ExecutorIdentity(args.executor_id, args.executor_epoch)
@@ -64,7 +65,7 @@ async def _run(args: argparse.Namespace) -> None:
     # Shared DATA_DIR writes are not process-safe; overlap spawn/import only.
     init_lease = ExecutorProcessLease(executor_init_lease_path(DATA_DIR))
     try:
-        await asyncio.to_thread(init_lease.acquire, 60.0)
+        await asyncio.to_thread(init_lease.acquire, executor_boot_timeout(WORKFLOW_EXECUTOR_COUNT))
         async with lifespan(app):
             manager = app.state.workflow_manager
             manager.set_local_executor_identity(identity)

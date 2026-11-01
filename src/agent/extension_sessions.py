@@ -17,6 +17,7 @@ from src.agent.tool_resume import (
     blocks_new_user_message, is_recoverable_accepted_resume, parse_accepted_tool_resume,
 )
 from src.config import DETACHED_SESSION_MAX_CONCURRENT_INVOCATIONS
+from src.runtime_admission import admitted_activity
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _SAFE_CONTEXT_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$")
@@ -333,6 +334,7 @@ class ExtensionSessionRuntime:
                     self._invocation_users.pop(session_id, None)
                     self._invocation_locks.pop(session_id, None)
 
+    @admitted_activity("有扩展会话调用正在准备或执行。")
     async def invoke(
         self,
         session_id: str,
@@ -365,6 +367,7 @@ class ExtensionSessionRuntime:
             finally:
                 await asyncio.shield(self._deactivate(session))
 
+    @admitted_activity("有扩展会话调用正在准备或执行。")
     async def resume_tools(
         self,
         session_id: str,

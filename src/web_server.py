@@ -498,6 +498,8 @@ async def lifespan(app: FastAPI):
                 on_restart=_recover_after_executor_restart,
                 event_handler=_handle_executor_event,
             )
+            logger.info('正在启动 %s 个 Workflow Executor；共享状态按顺序初始化，等待上限 %.0f 秒。',
+                        WORKFLOW_EXECUTOR_COUNT, workflow_executor_pool.startup_timeout)
             await workflow_executor_pool.start()
             workflow_mgr.attach_execution_delegate(workflow_executor_pool)
             stale_reassigned = workflow_mgr.reconcile_executor_pool(

@@ -676,6 +676,10 @@ export type WritingLibraryItem = {
   id: string; name: string; genres: string[]; pov: string[]; tone: string[];
   language: string; candidate_count: number; source_sha256?: string; source_mode?: string; created_at: string; version: number;
   style_count?: number; conflict_count?: number;
+  pov_metadata?: {
+    source_pov: string[]; source_status: "known" | "mixed" | "unknown"; source_basis: "profile" | "candidates" | "none";
+    target_pov: string[]; target_status: "known" | "partial" | "unknown";
+  };
 };
 
 export async function listWritingLibrary() {

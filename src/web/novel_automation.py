@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from src.workflow.model_preferences import atomic_write
+from src.runtime_admission import admitted_activity
 from .novel_repair import repair_context, prepare_repair
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,9 @@ class NovelAutomation:
         self._apply_action(root, state, policy.repair_ready(state, result["feedback_path"]))
 
     def _next_dispatch(self, root):
+        from src.runtime_admission import is_closed
+        if is_closed():
+            return None
         state = _read(root)
         if not _armed(state):
             return None
@@ -208,6 +212,7 @@ class NovelAutomation:
         self._save(root, state)
         return ref
 
+    @admitted_activity("后台自动创作正在推进。", closed_result=None)
     async def tick(self, root):
         root = Path(root).resolve()
         guard = self._root_locks.setdefault(str(root), asyncio.Lock())
@@ -223,6 +228,9 @@ class NovelAutomation:
                     if not _armed(_read(root)):
                         return
                 result = await self.manager.run_task(ref["workflow_id"], ref["task_id"])
+                from src.runtime_admission import is_closed
+                if is_closed():
+                    return
                 if result and result.get("success") is False:
                     raise ValueError(result.get("message") or "启动任务失败。")
             except asyncio.CancelledError:

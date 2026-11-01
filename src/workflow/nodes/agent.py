@@ -510,6 +510,7 @@ class AgentNode(BaseNodePlugin):
                             error=recovery_error,
                             session_id=session_id,
                             token_usage=self._get_session_token_usage(sm, session_id),
+                            token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
                         )
             wait_elapsed = time.time() - wait_start
             logger.debug(
@@ -522,6 +523,7 @@ class AgentNode(BaseNodePlugin):
                 status="failed", error=f"节点执行超时 ({timeout}秒)",
                 session_id=session_id,
                 token_usage=node_token_usage,
+                token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
             )
 
         # 从 session 读取累计 token 消耗
@@ -557,6 +559,7 @@ class AgentNode(BaseNodePlugin):
                     session_id=session_id,
                     outputs={},
                     token_usage=node_token_usage,
+                    token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
                 )
 
         # 构建 NodeResult，提取输出变量
@@ -607,6 +610,7 @@ class AgentNode(BaseNodePlugin):
                                 session_id=session_id,
                                 outputs={},
                                 token_usage=node_token_usage,
+                                token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
                             )
                         output_text = json_result["text"]
                         json_meta = json_result.get("meta", {})
@@ -637,6 +641,8 @@ class AgentNode(BaseNodePlugin):
                         error=f"保存输出文件路径占位符解析失败: {e}",
                         session_id=session_id,
                         outputs={},
+                        token_usage=self._get_session_token_usage(sm, session_id),
+                        token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
                     )
                 except Exception as e:
                     # IO 错误
@@ -647,6 +653,8 @@ class AgentNode(BaseNodePlugin):
                         error=f"保存输出文件失败: {e}",
                         session_id=session_id,
                         outputs={},
+                        token_usage=self._get_session_token_usage(sm, session_id),
+                        token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
                     )
             else:
                 error = (
@@ -661,6 +669,7 @@ class AgentNode(BaseNodePlugin):
                     session_id=session_id,
                     outputs={},
                     token_usage=node_token_usage,
+                    token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
                 )
 
         return NodeResult(
@@ -670,6 +679,7 @@ class AgentNode(BaseNodePlugin):
             session_id=session_id,
             outputs=outputs,
             token_usage=node_token_usage,
+            token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
         )
 
     async def _prepare_json_output(
@@ -727,6 +737,13 @@ class AgentNode(BaseNodePlugin):
             return None
         cumulative = session.get_cumulative_token_usage()
         return cumulative if cumulative else None
+
+    @staticmethod
+    def _get_session_token_usage_calls(sm, session_id: str) -> list[dict]:
+        """Return the ledger with NodeResult even if the session is no longer hot."""
+        session = AgentNode._resolve_session(sm, session_id)
+        getter = getattr(session, "get_token_usage_calls", None)
+        return getter() if callable(getter) else []
 
     # ----------------------------------------------------------
     # 审批处理（从 engine._handle_approval_request 迁移）

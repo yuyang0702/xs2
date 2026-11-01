@@ -43,6 +43,10 @@ def library_client(tmp_path, monkeypatch):
     app = FastAPI(); app.include_router(novel_routes.router)
     app.state.workflow_manager = manager
     monkeypatch.setattr(novel_routes, "_library_root", library)
+    # Deletion owns filesystem changes; viewpoint interpretation is a separate
+    # plugin capability, exercised with the real service in its route test.
+    monkeypatch.setattr(novel_routes, "console_service", lambda: SimpleNamespace(
+        library_metadata=lambda manifest, _profile, _candidates: manifest))
     with TestClient(app) as client:
         yield client, library, book, tasks, manager
 

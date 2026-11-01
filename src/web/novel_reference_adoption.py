@@ -71,7 +71,9 @@ class ReferenceAdoptionJobs:
         return self._delegate
 
     def start(self, root, request_id, payload):
-        return self.delegate.start(root, request_id, payload)
+        from src.runtime_admission import activity_scope
+        with activity_scope("参考写法正在准备检查或采用。"):
+            return self.delegate.start(root, request_id, payload)
 
     def get(self, root, request_id):
         return self.delegate.get(root, request_id)

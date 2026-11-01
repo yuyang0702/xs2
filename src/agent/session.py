@@ -918,6 +918,8 @@ class AgentSession:
     async def _invocation_scope(self):
         """串行化调用，并在任务取消时恢复完整的会话消息检查点。"""
         async with self._invoke_lock:
+            from src.runtime_admission import ensure_accepting
+            ensure_accepting()
             if self._termination_requested:
                 raise RuntimeError(f"Session {self.session_id} 已终止，无法继续执行")
 
@@ -1911,6 +1913,7 @@ class AgentSession:
         pending_tool_run_ids_by_call_id: dict[str, str] = {}
         pending_tool_run_ids_by_node_run_id: dict[str, str] = {}
         llm_call_started_at: dict[str, str] = {}
+        llm_call_model_ids: dict[str, str] = {}
         settled_tool_call_ids: set[str] = set()
 
         async def finish_unsettled_tools(code: str, status: str = "failed"):
@@ -1962,6 +1965,10 @@ class AgentSession:
                     run_id = str(event.get("run_id", ""))
                     if run_id:
                         llm_call_started_at[run_id] = datetime.now(timezone.utc).isoformat()
+                        metadata = event.get("metadata") or {}
+                        model_id = metadata.get("determinflow_model_id") if isinstance(metadata, dict) else None
+                        if isinstance(model_id, str) and model_id:
+                            llm_call_model_ids[run_id] = model_id
 
                 elif kind == "on_chat_model_stream":
 
@@ -2049,6 +2056,7 @@ class AgentSession:
                         for item in self._token_usage_calls
                     ):
                         llm_call_started_at.pop(run_id, None)
+                        llm_call_model_ids.pop(run_id, None)
                         continue
                     # LLM 完成生成：提取完整 AIMessage（含 tool_calls）追加到 record
                     output = event.get("data", {}).get("output")
@@ -2060,11 +2068,15 @@ class AgentSession:
                         incremental_saved_count += 1
 
                         # 提取 API token usage 并构建监控数据
+                        metadata = event.get("metadata") or {}
+                        model_id = metadata.get("determinflow_model_id") if isinstance(metadata, dict) else None
+                        started_model_id = llm_call_model_ids.pop(run_id, None)
                         await self._extract_and_broadcast_token_usage(
                             output,
                             event_callback,
                             call_timestamp=llm_call_started_at.pop(run_id, None),
                             run_id=run_id or None,
+                            model_id=model_id if isinstance(model_id, str) and model_id else started_model_id,
                         )
 
                         self._sync_context_snapshot()
@@ -2638,6 +2650,7 @@ class AgentSession:
         event_callback,
         call_timestamp: str | None = None,
         run_id: str | None = None,
+        model_id: str | None = None,
     ) -> None:
         """从 LLM 响应中提取 token usage 数据并广播给前端。
 
@@ -2646,6 +2659,7 @@ class AgentSession:
             event_callback: 事件回调函数
             call_timestamp: 请求开始时间；缺失时回退为响应完成时间
             run_id: LangGraph 模型调用 ID，用于事件重放去重
+            model_id: 本次模型调用携带的已解析 provider:model 身份
         """
         try:
             if run_id and any(
@@ -2766,7 +2780,7 @@ class AgentSession:
             )
 
             # 规范化 provider/model，账本不能只依赖可变的展示名称。
-            model_id = self.model_id or "unknown"
+            model_id = model_id or self.model_id or "unknown"
             if ":" in model_id:
                 provider_id, model_name = model_id.split(":", 1)
             else:
@@ -2781,10 +2795,10 @@ class AgentSession:
             from src.core.model_manager import DEFAULT_MAX_CONTEXT_TOKENS
 
             max_context_tokens = DEFAULT_MAX_CONTEXT_TOKENS
-            if self.model_id:
+            if model_id != "unknown":
                 try:
                     from src.core.model_manager import get_model_manager
-                    model_info = get_model_manager().get_model_info(self.model_id)
+                    model_info = get_model_manager().get_model_info(model_id)
                     max_context_tokens = model_info.get(
                         "maxContextTokens", DEFAULT_MAX_CONTEXT_TOKENS
                     )
@@ -2808,7 +2822,7 @@ class AgentSession:
                     "total_tokens": estimates["total_tokens"],
                 },
                 "max_context_tokens": max_context_tokens,
-                "model_id": self.model_id or "",
+                "model_id": model_id if model_id != "unknown" else "",
                 "llm_call_count": self._llm_call_count,
                 "updated_at": call_completed_at,
             }

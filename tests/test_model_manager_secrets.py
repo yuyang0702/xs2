@@ -509,6 +509,7 @@ def test_provider_templates_expose_model_parameter_capabilities(tmp_path: Path) 
         "qwen",
         "openai",
         "anthropic",
+        "volcengine",
     }
 
     assert manager.get_provider_schema("openai")["default_base_url"] == (

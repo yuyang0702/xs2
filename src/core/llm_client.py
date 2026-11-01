@@ -538,6 +538,13 @@ def create_llm(
         kwargs,
     )
     _apply_request_fingerprint_headers(kwargs, request_fingerprint)
+    # Carry the resolved route through LangChain start/end events. Session.model_id
+    # may still contain a bare alias or None when the factory selected a default.
+    # This is invocation evidence, so caller metadata must not replace it.
+    kwargs["metadata"] = {
+        **(kwargs.get("metadata") or {}),
+        "determinflow_model_id": resolved,
+    }
 
     logger.info(
         f"使用 ModelManager 配置: provider={provider_id}, model={model_name}, "

@@ -17,6 +17,7 @@ from .executor_events import EventHandler
 from .executor_lease import ExecutorProcessLease
 from .executor_protocol import ExecutorIdentity
 from .executor_supervisor import WorkflowExecutorSupervisor
+from .executor_timing import executor_boot_timeout
 
 
 POOL_STATE_VERSION = 1
@@ -127,7 +128,7 @@ class WorkflowExecutorPool:
         executor_count: int,
         *,
         data_dir: Path = DATA_DIR,
-        startup_timeout: float = 60.0,
+        startup_timeout: float | None = None,
         shutdown_timeout: float = 30.0,
         restart_backoff_max: float = 5.0,
         on_restart: RestartCallback | None = None,
@@ -135,7 +136,7 @@ class WorkflowExecutorPool:
     ):
         self.executor_ids = executor_ids(executor_count)
         self.data_dir = Path(data_dir)
-        self.startup_timeout = startup_timeout
+        self.startup_timeout = executor_boot_timeout(executor_count) if startup_timeout is None else startup_timeout
         self.shutdown_timeout = shutdown_timeout
         self.restart_backoff_max = restart_backoff_max
         self.on_restart = on_restart

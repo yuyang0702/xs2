@@ -18,6 +18,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from src.config import SESSIONS_DIR, ROUNDTABLE_MAX_IDLE_CYCLES
 from src.core.llm_client import create_llm
+from src.runtime_admission import admitted_activity, RESTART_MESSAGE
 from src.web.event_bus import event_bus
 from src.roundtable.models import (
     Seat,
@@ -964,6 +965,7 @@ class RoundtableManager:
 
     # ============ 启动 ============
 
+    @admitted_activity("圆桌讨论正在准备。", closed_result={"success": False, "message": RESTART_MESSAGE})
     async def start(self, session_id: str) -> dict:
         """
         启动圆桌会议讨论。
@@ -1106,6 +1108,7 @@ class RoundtableManager:
             return {"success": True, "message": f"圆桌会议 {session_id} 已暂停"}
         return {"success": False, "message": f"会议当前状态为 {session.status}，无法暂停"}
 
+    @admitted_activity("圆桌讨论正在准备。", closed_result={"success": False, "message": RESTART_MESSAGE})
     async def resume(self, session_id: str) -> dict:
         """恢复暂停的圆桌会议"""
         session = self.sessions.get(session_id)

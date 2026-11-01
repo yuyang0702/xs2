@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, afterEach, test } from "node:test";
 import { Window } from "happy-dom";
 import type { GlobalDialog } from "./ui/use-dialog";
-import type { WritingLibraryDeleteResult } from "../lib/api";
+import type { WritingLibraryDeleteResult, WritingLibraryItem } from "../lib/api";
 
 const dom = new Window({ url: "http://localhost/" });
 for (const name of ["window", "document", "Node", "Text", "HTMLElement", "Element", "Event", "MouseEvent", "navigator", "sessionStorage"]) {
@@ -44,7 +44,7 @@ function button(label: string) {
 async function click(target: HTMLElement) { await act(async () => target.click()); }
 async function confirm(value: boolean) { await act(async () => confirmResult?.(value)); }
 
-async function mount(items = exampleItems) {
+async function mount(items: WritingLibraryItem[] = exampleItems, projectPov = "third_person") {
   deleteCalls = [];
   deleteResult = async ids => response({ success: true, deleted_ids: ids, missing_ids: [], failed: [] });
   globalThis.fetch = async (input, init) => {
@@ -56,6 +56,7 @@ async function mount(items = exampleItems) {
       return deleteResult(ids);
     }
     if (url.endsWith("/library")) return response({ items });
+    if (url.includes("/library/")) return response({ manifest: items[0], profile: {}, candidates: { candidates: [] } });
     throw new Error(`Unexpected request: ${url}`);
   };
   const dialog: GlobalDialog = {
@@ -69,10 +70,44 @@ async function mount(items = exampleItems) {
   const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => root?.render(createElement(DialogContext.Provider, { value: dialog },
     createElement(WritingLibraryView, {
-      workflowId: "test", workspace: "book", project: { values: { genre: "", narrative_pov: "third_person" } },
+      workflowId: "test", workspace: "book", project: { values: { genre: "", narrative_pov: projectPov } },
       onAttach: async () => {}, onBack: () => {}, onConfirm: () => {},
     }))));
 }
+
+test("library cards and reader distinguish source narration from supported target views", async () => {
+  await mount([{ ...exampleItems[0], pov: ["third_person"], pov_metadata: {
+    source_pov: ["first_person"], source_status: "known", source_basis: "candidates",
+    target_pov: ["first_person", "third_person"], target_status: "known",
+  } }], "first_person");
+  const source = document.querySelector('[aria-label="原作叙事视角"]');
+  assert.ok(source, "Source narration must be displayed separately from applicability");
+  assert.match(source.textContent || "", /第一人称/);
+  assert.doesNotMatch(source.textContent || "", /第三人称/);
+  assert.match(document.querySelector('[aria-label="写法适用视角"]')?.textContent || "", /第一人称.*第三人称/);
+  assert.match(document.querySelector('article')?.textContent || "", /初步匹配/);
+  await click(button("查看具体写法"));
+  assert.match(document.querySelector('[aria-label="原作叙事视角"]')?.textContent || "", /第一人称/);
+  assert.match(document.querySelector('[aria-label="写法适用视角"]')?.textContent || "", /第一人称.*第三人称/);
+});
+
+test("unknown project and source views never silently become third-person labels", async () => {
+  await mount([{ ...exampleItems[0], pov: ["third_person"] }], "");
+  assert.match(document.querySelector('[aria-label="原作叙事视角"]')?.textContent || "", /待判断/);
+  assert.match(document.querySelector('[aria-label="写法适用视角"]')?.textContent || "", /待核对/);
+  assert.match(document.querySelector('article')?.textContent || "", /本书视角待设置/);
+  assert.doesNotMatch(document.querySelector('article')?.textContent || "", /第三人称|初步匹配/);
+});
+
+test("mixed source narration and partial applicability stay explicit", async () => {
+  await mount([{ ...exampleItems[0], pov: [], pov_metadata: {
+    source_pov: ["first_person", "third_person"], source_status: "mixed", source_basis: "candidates",
+    target_pov: ["first_person"], target_status: "partial",
+  } }], "first_person");
+  assert.match(document.querySelector('[aria-label="原作叙事视角"]')?.textContent || "", /混合.*第一人称.*第三人称/);
+  assert.match(document.querySelector('[aria-label="写法适用视角"]')?.textContent || "", /第一人称.*部分.*待核对/);
+  assert.doesNotMatch(document.querySelector('article')?.textContent || "", /初步匹配/);
+});
 
 test("select all and batch deletion require confirmation and update the list", async () => {
   await mount();

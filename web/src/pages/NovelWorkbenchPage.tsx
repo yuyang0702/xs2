@@ -1,4 +1,5 @@
 import NovelResourceGate from "../components/NovelResourceGate";
+import NovelTaskProgress from "../components/NovelTaskProgress";
 import {automationState, readAutomation, controlAutomation} from "../lib/novel-automation";
 import {novelWorkflowId as workflowId, novelStageId} from "../lib/novel-resources";
 import NovelAdvisorConversation from "../components/NovelAdvisorConversation";
@@ -30,7 +31,7 @@ import {
   Play, RefreshCw, Settings2, Sparkles, WandSparkles, Library, Upload, SlidersHorizontal, Trash2, Users,
 } from "lucide-react";
 import {
-  askNovelAssistant, checkNovelContinuation, fetchNovelArchiveState, fetchNovelAssistantHistory, attachWritingLibrary, createTask, getTask, getWorkflow, listWorkspaceFiles, listWorkflows,
+  askNovelAssistant, checkNovelContinuation, fetchNovelArchiveState, fetchNovelAssistantHistory, attachWritingLibrary, createTask, getTask, getWorkflow, listWorkspaceFiles, listWorkflows, getAllModels,
   publishWritingLibrary, saveNovelProject, listNovelProjects, deleteNovelProject, inspectNovelImportUrl, importNovelUrl, readWorkflowWorkspaceFile, readWorkspaceFile, runTask, writeNovelWorkspaceText, listWritingLibrary,
   type WritingLibraryItem,
 } from "../lib/api";
@@ -62,11 +63,11 @@ const STAGES: StageMeta[] = [
   { id: "novel-advisor", title: "小说顾问", group: "方向准备", description: "根据资料和创意，判断题材定位、写法、钩子、伏笔和递进冲突。", artifact: "learning/advisor_report.json", preferredFields: ["premise", "genre", "narrative_pov", "language", "conflict_plan_mode", "conflict_point_count", "foreshadowing_count"], optional: true },
   { id: "style-compatibility-advisor", title: "写法兼容顾问", group: "本书参考写法", description: "比较当前作品与蒸馏候选，给出推荐、适配和冲突提示；没有候选时可直接创作。", artifact: "learning/compatibility_report.json", preferredFields: ["premise", "genre", "narrative_pov", "language"], optional: true },
   { id: "adopt-reference", title: "选择与确认", group: "本书参考写法", description: "分别确认风格、写法与冲突的本书适配；已有采用内容持续保留。", artifact: "learning/active_context.md", optional: true },
-  { id: "build", title: "建立世界观", group: "创作规划", description: "根据已确认的方向建立世界运行规则。", artifact: "meta/world_foundation.md", preferredFields: ["premise", "genre", "language", "narrative_pov"] },
-  { id: "character", title: "创建角色", group: "创作规划", description: "生成角色档案、关系和声音锚点。", artifact: "meta/character_profiles.md", preferredFields: ["narrative_pov", "language"] },
+  { id: "build", title: "建立世界观", group: "创作规划", description: "根据已确认的方向建立世界运行规则。", artifact: "meta/world_foundation.md", preferredFields: ["premise", "genre", "language", "narrative_pov", "preparation_mode"] },
+  { id: "character", title: "创建角色", group: "创作规划", description: "生成角色档案、关系和声音锚点。", artifact: "meta/character_profiles.md", preferredFields: ["narrative_pov", "language", "preparation_mode"] },
   { id: "story-plan", title: "规划故事", group: "创作规划", description: "把世界、角色、看点和写法汇总为故事引擎。", artifact: "meta/story_plan.md", preferredFields: ["narrative_pov", "language"] },
   { id: "outline", title: "生成卷纲", group: "创作规划", description: "按短篇或长篇模式规划篇幅、分卷、伏笔和递进冲突。", artifact: "outline/near_term_outline.md", preferredFields: ["volume_number", "estimated_length", "words_per_chapter", "latest_chapter", "narrative_pov", "conflict_plan_mode", "conflict_point_count", "foreshadowing_count"] },
-  { id: "mvp", title: "生成正文", group: "正文生产", description: "按当前章意图、字数和作品设定生成正文。", artifact: "story/{chapter}/chapter.md", preferredFields: ["human_intent", "world_intent", "target_word_count", "writer_type", "chapter_number", "narrative_pov", "language"] },
+  { id: "mvp", title: "生成正文", group: "正文生产", description: "按当前章意图、字数和作品设定生成正文。", artifact: "story/{chapter}/chapter.md", preferredFields: ["human_intent", "world_intent", "target_word_count", "writer_type", "chapter_number", "narrative_pov", "language", "preparation_mode"] },
   { id: "polish", title: "润色本章", group: "正文生产", description: "改善语言、节奏和阅读体验，不改变已确认事实。", artifact: "story/{chapter}/chapter.md", preferredFields: ["narrative_pov", "language"] },
   { id: "reader-sim", title: "模拟读者", group: "质量检查", description: "从读者视角判断看点、钩子、节奏和继续阅读意愿。", artifact: "story/{chapter}/reader_report.json", preferredFields: ["chapter_number", "narrative_pov", "language"], optional: true },
   { id: "post-hoc", title: "质量审核", group: "质量检查", description: "确认章节事实并回写世界、角色、伏笔和叙事债务。", artifact: "story/{chapter}/diff_story_confirmed.md", preferredFields: ["chapter_number", "narrative_pov", "language"] },
@@ -164,7 +165,7 @@ function restore(workspace: string): Project {
     };
   } catch { /* invalid local draft */ }
   return {
-    title: "未命名作品", mode: "short", index: 0, stageId: "novel-advisor", values: { ...FALLBACK_DEFAULTS }, refs: {}, completed: [], selected: [],
+    title: "未命名作品", mode: "short", index: 0, stageId: "novel-advisor", values: { ...FALLBACK_DEFAULTS, preparation_mode: "compact" }, refs: {}, completed: [], selected: [],
     autoNext: false, autoScope: "manual", autoChapterLimit: 1, autoChapterStarted: null, directionConfirmed: false,
     distillationSkipped: false, advisorAccepted: false, assistantPlan: "", writingMode: "original", libraryRefs: [], persisted: false,
   };
@@ -641,7 +642,7 @@ function NovelWorkbenchContent() {
     setFiles([]);
     setLoadedWorkspace(next);
     const base = restore(next);
-    setProject({ ...base, mode, persisted: false, index: 0, stageId: "novel-advisor", autoScope: "manual", autoChapterLimit: mode === "short" ? 1 : 3, values: { ...base.values, conflict_plan_mode: mode === "serial" ? "serial_opening" : "short_full", conflict_point_count: mode === "serial" ? "4" : "3", foreshadowing_count: mode === "serial" ? "3" : "2" } }); setPageFeedback("新作品尚未保存；开始第一个工作流步骤后才会登记到作品管理。"); setView("flow");
+    setProject({ ...base, mode, persisted: false, index: 0, stageId: "novel-advisor", autoScope: "manual", autoChapterLimit: mode === "short" ? 1 : 3, values: { ...base.values, preparation_mode: mode === "short" ? "compact" : "full", conflict_plan_mode: mode === "serial" ? "serial_opening" : "short_full", conflict_point_count: mode === "serial" ? "4" : "3", foreshadowing_count: mode === "serial" ? "3" : "2" } }); setPageFeedback("新作品尚未保存；开始第一个工作流步骤后才会登记到作品管理。"); setView("flow");
   };
   const saveSettings = async (updated: Project) => {
     const title = updated.title.trim();
@@ -1367,6 +1368,7 @@ function FlowView({ onServerState, chapterOpening = false, nextChapterNumber, on
       </section>
       <p className="text-xs leading-6 text-muted-foreground">随时点击右上角「创作助手」讨论本章剧情、人物、伏笔与写法。</p>
     </div>
+    {(!advisorMode || !!ref) && task && <NovelTaskProgress task={task} />}
     {(!advisorMode || !!ref) && <section className={`${cardClass} p-4`}><div className="flex items-center gap-3 text-sm"><FileText className="h-4 w-4 text-primary" /><span>当前产物</span><span className="font-mono text-xs text-muted-foreground">{currentStage.artifact.replace("{chapter}", project.values.chapter_number || "0001")}</span><span className="ml-auto text-xs text-muted-foreground">{task ? statusLabel(task.status) : ref ? "正在恢复状态" : "尚未执行"}</span></div>{preview && currentStage.id !== "style-compatibility-advisor" && <NovelWorkflowArtifact content={preview} title={currentStage.title + " · 已生成内容"} readerReport={currentStage.id === "reader-sim"} />}{currentStage.id === "style-compatibility-advisor" && preview && <CompatibilityReport content={preview} candidateSet={candidateSet} setProject={setProject} adoptedIds={[...adoptedStyles,...adoptedConflicts]} />}</section>}
   </div>;
 }
@@ -1429,6 +1431,8 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   const [adoptionRestoring, setAdoptionRestoring] = useState(true);
   const [adoptionError, setAdoptionError] = useState("");
   const [adoptionRefreshKey, setAdoptionRefreshKey] = useState(0);
+  const [adoptionModel, setAdoptionModel] = useState('');
+  const [adoptionModels, setAdoptionModels] = useState<Array<{value:string;label:string}>>([]);
   const adoptionGuard = useRef(true);
   const adoptionObserver = useRef<AbortController | null>(null);
   const adoptionRequest = useRef<{id:string;entry_id:string} | null>(null);
@@ -1488,6 +1492,14 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
     });
     return () => { active = false; };
   }, [advisorMode]);
+  useEffect(() => {
+    let active = true;
+    setAdoptionModel('');
+    if (advisorMode) void getAllModels().then(result=>{
+      if (active) setAdoptionModels(result.models);
+    }).catch(()=>{if (active) setAdoptionModels([]);});
+    return ()=>{active=false;};
+  }, [advisorMode, workspace]);
   useEffect(() => {
     try { localStorage.setItem(cacheKey, JSON.stringify(entries)); } catch { /* Server remains the durable source. */ }
   }, [cacheKey, entries]);
@@ -1590,6 +1602,7 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
     setAdoptionJob({id:requestId,request_id:requestId,entry_id:entry.id,status:'checking'});
     try {
       const job = await startReferenceAdoption({workflow_id:workflowId('build'),workspace,entry_id:entry.id,request_id:requestId,
+        ...(adoptionModel ? {model_override:adoptionModel} : {}),
         ...(project._revision !== undefined ? {expected_revision:project._revision} : {})},
         {signal:observer.signal,onJob:job=>setAdoptionJob(job)});
       await refreshAdoptedSelections(job,observer.signal);
@@ -1618,7 +1631,7 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   };
   const adoptionStatus = <NovelReferenceAdoptionStatus job={adoptionJob} error={adoptionError} restoring={adoptionRestoring} onRefresh={()=>setAdoptionRefreshKey(key=>key+1)}/>;
   const latestAdvisor = [...entries].reverse().find(entry=>entry.status === 'completed' && entry.purpose === 'advisor');
-  if (advisorMode) return <>{adoptionStatus}<NovelAdvisorConversation question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)} onQuickAdopt={handleQuickAdopt} onManualSelect={onManualSelect} referenceAdoptionBusy={adoptionPending} referenceAdoptionApplied={adoptionJob?.status === "applied" && adoptionJob.entry_id === latestAdvisor?.id && referenceAdoptionOutcome(adoptionJob).success}/>
+  if (advisorMode) return <>{adoptionStatus}<NovelAdvisorConversation referenceModels={adoptionModels} referenceModel={adoptionModel} onReferenceModelChange={setAdoptionModel} question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)} onQuickAdopt={handleQuickAdopt} onManualSelect={onManualSelect} referenceAdoptionBusy={adoptionPending} referenceAdoptionApplied={adoptionJob?.status === "applied" && adoptionJob.entry_id === latestAdvisor?.id && referenceAdoptionOutcome(adoptionJob).success}/>
     {readingEntry && <NovelReadingDialog title="AI 小说顾问 · 讨论结果" onClose={()=>setReadingEntry(null)}><details className="mb-5 text-sm leading-7 text-muted-foreground"><summary className="cursor-pointer">查看本次讨论的原始想法</summary><p className="mt-3 whitespace-pre-wrap">{readingEntry.question}</p></details><NovelArchiveContent content={advisorMarkdown(readingEntry.reply || readingEntry.message || "暂无分析内容")}/>{readingEntry.advisor_sections && Object.entries(readingEntry.advisor_sections).map(([key,content])=><section key={key} className="mt-6"><h3 className="mb-3 font-semibold">{{direction:"推荐的故事方向",hook:"核心看点",writing:"适合的写法",risks:"需要注意的问题"}[key]}</h3><NovelArchiveContent content={advisorMarkdown(typeof content === 'string' ? content : '')}/></section>)}</NovelReadingDialog>}
   </>;
   return <aside className={cardClass + " h-fit p-5 xl:sticky xl:top-24"}>

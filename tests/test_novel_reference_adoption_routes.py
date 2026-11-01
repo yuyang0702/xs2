@@ -113,3 +113,25 @@ def test_latest_on_new_book_is_empty_without_creating_workspace(control):
     assert response.status_code == 200, response.text
     assert response.json() == {'job': None}
     assert not fresh.exists()
+
+
+def test_one_check_can_use_an_existing_model_without_saving_configuration(control, monkeypatch):
+    from src.core import model_manager
+    monkeypatch.setattr(model_manager, 'get_model_manager', lambda: SimpleNamespace(
+        get_all_models=lambda: ['provider:backup']))
+    before = (control.root / '.novel-project.json').read_bytes()
+    response = control.client.post('/api/novel-console/reference-adoption',
+                                   json=body(control, model_override='provider:backup'))
+    assert response.status_code == 200, response.text
+    assert control.calls[-1][1]['_model_override'] == 'provider:backup'
+    assert (control.root / '.novel-project.json').read_bytes() == before
+
+
+def test_one_check_rejects_unconfigured_models_before_starting(control, monkeypatch):
+    from src.core import model_manager
+    monkeypatch.setattr(model_manager, 'get_model_manager', lambda: SimpleNamespace(
+        get_all_models=lambda: ['provider:backup']))
+    response = control.client.post('/api/novel-console/reference-adoption',
+                                   json=body(control, model_override='unknown:model'))
+    assert response.status_code == 400, response.text
+    assert not control.calls

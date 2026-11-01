@@ -84,6 +84,24 @@ def test_legacy_auto_flag_does_not_start_on_deployment(tmp_path):
     assert manager.created == []
 
 
+def test_normal_polish_does_not_require_unselected_default_feedback_file(tmp_path):
+    root, manager, service = setup(tmp_path)
+    data = state(root)
+    data['stageId'] = 'polish'
+    write(root / '.novel-project.json', data)
+    original = manager.get_workflow
+    def definition(workflow_id):
+        workflow = original(workflow_id)
+        field = next(item for item in workflow['definition']['variables'] if item['key'] == 'author_feedback_file')
+        field['default'] = 'quality/author_feedback.md'
+        return workflow
+    manager.get_workflow = definition
+    asyncio.run(service.tick(root))
+    assert len(manager.created) == 1
+    assert manager.created[0]['parameter_values']['author_feedback_file'] == ''
+    assert state(root)['autoNext'] is True
+
+
 def test_backend_dispatch_survives_restart_and_advances_without_browser(tmp_path):
     root, manager, service = setup(tmp_path)
     asyncio.run(service.tick(root))

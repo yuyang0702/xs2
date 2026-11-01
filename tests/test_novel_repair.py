@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
+from importlib import import_module
 
 from src.web.novel_repair import repair_context, prepare_repair
 from src.web.novel_assistant import NovelAssistantJobs
-from src.web.novel_plugin import console_service
 
 
 class RepairTests(unittest.IsolatedAsyncioTestCase):
@@ -58,9 +58,10 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.02)
                 return SimpleNamespace(content='写出送水现场，并保留承诺。')
         jobs = NovelAssistantJobs()
+        assistant_module = import_module(type(jobs.delegate).__module__)
         with (
-            patch.object(console_service().assistant, 'ANALYSIS_TIMEOUT_SECONDS', 0.001),
-            patch.object(console_service().assistant, 'ADVISOR_COMPLETION_TIMEOUT_SECONDS', 1),
+            patch.object(assistant_module, 'ANALYSIS_TIMEOUT_SECONDS', 0.001),
+            patch.object(assistant_module, 'ADVISOR_COMPLETION_TIMEOUT_SECONDS', 1),
             patch('src.web.novel_assistant.create_llm', return_value=SlowModel()) as factory,
         ):
             entry = jobs.start(self.root, 'delayed-repair', {

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from src.cron.runner import run_job
+from src.runtime_admission import admitted_activity
 
 if TYPE_CHECKING:
     from src.agent.session_manager import SessionManager
@@ -72,6 +73,7 @@ class CronScheduler:
             except asyncio.TimeoutError:
                 pass  # 正常超时，继续下一轮
 
+    @admitted_activity("定时任务正在准备或执行。", closed_result=None)
     async def _tick(self) -> None:
         """单次 tick：加载 jobs，找出到期的，逐个执行"""
         jobs = self._job_mgr.load_jobs()
@@ -97,6 +99,7 @@ class CronScheduler:
         except Exception:
             logger.exception("保存 jobs 失败")
 
+    @admitted_activity("定时任务正在准备或执行。", closed_result=None)
     async def _run_job(self, job) -> None:
         """执行单个 job（委托给 runner）"""
         logger.info(f"执行 Job: {job.id} ({job.name})")

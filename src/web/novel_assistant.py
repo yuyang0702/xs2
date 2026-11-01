@@ -37,7 +37,9 @@ class NovelAssistantJobs:
         return self.delegate.history(root)
 
     def start(self, root, request_id, payload):
-        return self.delegate.start(root, request_id, payload)
+        from src.runtime_admission import activity_scope
+        with activity_scope("小说助手正在准备分析。"):
+            return self.delegate.start(root, request_id, payload)
 
     def _write(self, root, entries):
         return self.delegate._write(root, entries)

@@ -122,6 +122,21 @@ PROVIDER_SCHEMAS = {
             }
         }
     },
+    "volcengine": {
+        "provider_type": "volcengine",
+        "display_name": "火山方舟",
+        "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "default_models": ["doubao-seed-character-260628"],
+        "hyperparams": {
+            "max_completion_tokens": {
+                "type": "number",
+                "min": 1,
+                "max": 65536,
+                "default": 32768,
+                "label": "最大输出Token"
+            }
+        }
+    },
     "openai_compatible": {
         "provider_type": "openai_compatible",
         "display_name": "OpenAI 兼容",

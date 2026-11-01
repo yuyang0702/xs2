@@ -111,7 +111,18 @@ class WorkflowManager(
         """Return the persisted admission mode without scanning Task history."""
         return self._execution_control.read()
 
+    @staticmethod
+    def _runtime_draining_result() -> dict | None:
+        from src.runtime_admission import is_closed, RESTART_MESSAGE
+        if is_closed():
+            return {"success": False, "error": "runtime_draining", "message": RESTART_MESSAGE,
+                    "retry_after_seconds": 3}
+        return None
+
     def _new_task_admission_result(self) -> dict | None:
+        launch_guard = self._runtime_draining_result()
+        if launch_guard is not None:
+            return launch_guard
         state = self._execution_control.read()
         if state["accepting_new_tasks"]:
             return None
@@ -698,6 +709,9 @@ class WorkflowManager(
             task_id: 任务 ID
             from_node_id: 从指定节点开始（用于回滚/重试）
         """
+        launch_guard = self._runtime_draining_result()
+        if launch_guard is not None:
+            return launch_guard
         if not self.is_workflow_owner_enabled(workflow_id):
             return self._workflow_read_only_result(workflow_id)
         task = self._load_task(workflow_id, task_id)
@@ -1302,6 +1316,9 @@ class WorkflowManager(
 
     async def start_pre_running_task(self, workflow_id: str, task_id: str) -> dict:
         """从预启动状态正式启动任务执行。"""
+        launch_guard = self._runtime_draining_result()
+        if launch_guard is not None:
+            return launch_guard
         if not self.is_workflow_owner_enabled(workflow_id):
             return self._workflow_read_only_result(workflow_id)
         task = self._load_task(workflow_id, task_id)

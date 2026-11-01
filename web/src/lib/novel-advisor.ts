@@ -31,9 +31,15 @@ export function adoptNovelAdvisor<T extends AdviserProject>(project: T, entry: N
     ? project.stageId : resume;
   const index = stages.findIndex(stage => stage.id === target);
   if (index < 0) return fail('没有找到后续创作步骤，请刷新工作流目录后再采用。');
+  // Library selections become requirements through their own compatibility
+  // transaction. Keep their structured, unapproved recommendations out of the
+  // story brief rather than coercing them to "[object Object]".
+  const guidance = [entry.reply, ...(['direction', 'hook', 'writing', 'risks'] as const)
+    .map(key => entry.advisor_sections?.[key])]
+    .filter((value): value is string => typeof value === 'string' && !!value.trim()).join('\n\n');
   return {project: {...updated, values:{...updated.values,
     source_idea:entry.configuration_base.advisor_brief || entry.question,
-    advisor_guidance:[entry.reply, ...Object.values(entry.advisor_sections || {})].join('\n\n')},
+    advisor_guidance:guidance},
     stageId:target, index, directionConfirmed:true, advisorAccepted:true,
     autoNext:false, autoLaunchStage:'', autoPauseReason:''}, success:true,
     message: established ? '顾问建议已采用，原有故事事实与创作进度持续保留。' : '顾问方案已采用，设置已填写；接下来建立世界观。'};

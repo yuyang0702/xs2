@@ -153,6 +153,33 @@ def test_init_lease_path_does_not_collide_with_member_leases(tmp_path):
     assert executor_init_lease_path(tmp_path).name not in member_names
 
 
+def test_default_boot_budget_covers_serialized_member_initialization(tmp_path, monkeypatch):
+    """Scale real boot seconds to milliseconds while keeping a shared init gate."""
+    async def scenario():
+        init_gate = asyncio.Lock()
+        completed = []
+        class Supervisor:
+            def __init__(self, *, executor_id, startup_timeout, **kwargs):
+                self.executor_id, self.timeout = executor_id, startup_timeout / 1000
+            async def start(self):
+                async def initialize():
+                    async with init_gate:
+                        await asyncio.sleep(0.03)
+                        completed.append(self.executor_id)
+                await asyncio.wait_for(initialize(), timeout=self.timeout)
+            async def stop(self):
+                pass
+        monkeypatch.setattr(executor_pool_module, 'WorkflowExecutorSupervisor', Supervisor)
+        pool = WorkflowExecutorPool(4, data_dir=tmp_path)
+        try:
+            await pool.start()
+            assert len(completed) == 4
+            assert pool._started
+        finally:
+            await pool.stop()
+    asyncio.run(scenario())
+
+
 def test_pool_starts_members_in_parallel_and_marks_started_only_after_all_succeed(
     tmp_path, monkeypatch,
 ):

@@ -36,6 +36,29 @@ from src.web.api_routes import router
 TEST_AUTH_TOKEN = "test-auth-token"
 
 
+def test_restart_activity_accepts_a_slow_but_verified_idle_executor():
+    """Busy UI polling can delay Windows IPC beyond the dashboard's budget."""
+    identity = ExecutorIdentity("workflow-executor-0", "slow-epoch")
+
+    async def call(operation):
+        assert operation == STATUS_OPERATION
+        await asyncio.sleep(2.1)
+        return {"executor_id": identity.executor_id, "epoch": identity.epoch,
+                "pid": 123, "active_task_count": 0}
+
+    readiness = SimpleNamespace(status="ready", is_ready=True)
+    pool = SimpleNamespace(
+        executor_ids=[identity.executor_id], identities=[identity],
+        member_pids={identity.executor_id: 123},
+        supervisor_for=lambda _: SimpleNamespace(snapshot=lambda: readiness),
+        client_for=lambda _: SimpleNamespace(call=call),
+    )
+    status = asyncio.run(collect_workflow_executor_status(pool, mode="process", strict_activity=True))
+    assert status["degraded"] is False
+    assert status["ready_count"] == status["reachable_count"] == 1
+    assert status["members"][0]["active_task_count"] == 0
+
+
 def _request(identity: ExecutorIdentity, **overrides):
     request = {
         "protocol_version": PROTOCOL_VERSION,

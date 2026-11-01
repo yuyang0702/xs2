@@ -50,3 +50,17 @@ test('incomplete, incompatible or empty plans do not move the workbench',()=>{
     assert.equal(result.project,current);
   }
 });
+
+test('story adoption keeps readable guidance and leaves library rules for separate compatibility approval',()=>{
+  const proposal=entry();
+  proposal.advisor_sections!.style_recommendations={adopted_styles:[{
+    library_id:'pending-source',choice_id:'pending-style',style:'尚未确认的参考口头禅',
+    reason:'需要检查',usage_in_story:'待确认的角色写法',priority:'HIGH',
+  }]};
+  const result=adoptNovelAdvisor(project(),proposal,defaults,stages);
+  assert.equal(result.success,true);
+  const guidance=(result.project.values as Record<string,string>).advisor_guidance;
+  assert.match(guidance,/救援开局/);
+  assert.match(guidance,/澄清8人与12人密度/);
+  assert.doesNotMatch(guidance,/\[object Object\]|pending-source|pending-style|尚未确认的参考口头禅/);
+});

@@ -20,6 +20,7 @@ class AdoptionStart(BaseModel):
     entry_id: UUID
     request_id: UUID
     expected_revision: int | None = Field(default=None, ge=0)
+    model_override: str | None = Field(default=None, max_length=256)
 
 
 def _available(request, workflow_id):
@@ -62,6 +63,15 @@ def _selected_model(manager, advisor):
     return nodes[0]['effective_model']
 
 
+def _request_model(manager, advisor, requested):
+    if not requested:
+        return _selected_model(manager, advisor)
+    from src.core.model_manager import get_model_manager
+    if requested not in get_model_manager().get_all_models():
+        raise HTTPException(400, '本次检查只能选择已经配置的模型，请刷新模型列表')
+    return requested
+
+
 @router.post('')
 async def start(payload: AdoptionStart, request: Request):
     _ensure_http_mutation_allowed(request, payload.workflow_id)
@@ -83,7 +93,7 @@ async def start(payload: AdoptionStart, request: Request):
                            'advisor_brief': base.get('advisor_brief', entry.get('question', ''))}
             job = _adoption_jobs(request).start(root, str(payload.request_id), {
                 'entry_id': str(payload.entry_id), 'project': project,
-                '_model_override': _selected_model(manager, advisor)})
+                '_model_override': _request_model(manager, advisor, payload.model_override)})
         return {'job': job}
     except (ValueError, OSError) as error:
         raise HTTPException(409, str(error)) from error

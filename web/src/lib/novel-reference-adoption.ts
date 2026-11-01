@@ -9,7 +9,7 @@ export type ReferenceAdoptionJob = {
   voice_status?: 'adapted' | 'pending_characters' | 'not_requested';
   voice_adaptations?: Array<Record<string,unknown>>;
 };
-export type ReferenceAdoptionPayload = {workflow_id:string;workspace:string;entry_id:string;request_id:string;expected_revision?:number};
+export type ReferenceAdoptionPayload = {workflow_id:string;workspace:string;entry_id:string;request_id:string;expected_revision?:number;model_override?:string};
 type Options = {signal?:AbortSignal;pollIntervalMs?:number;onJob?:(job:ReferenceAdoptionJob)=>void};
 export class ReferenceAdoptionRejectedError extends Error {}
 export async function recoverReferenceAdoption(job:ReferenceAdoptionJob,workflowId:string,workspace:string,options:Options = {}):Promise<ReferenceAdoptionJob|null> {

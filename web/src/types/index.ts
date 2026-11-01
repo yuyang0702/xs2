@@ -91,6 +91,7 @@ export interface ProviderSchema {
   provider_type: string;
   display_name: string;
   default_base_url: string;
+  default_models?: string[];
   api_format: "openai" | "openai_responses" | "anthropic";
   reasoning_efforts: string[];
   model_params: Record<string, ModelParamFieldSchema>;
@@ -808,6 +809,7 @@ export interface WorkflowTask {
   completed_at: string | null;
   node_states: Record<string, NodeExecutionInfo>;
   parameter_values?: Record<string, string>;
+  snapshot_definition?: WorkflowDefinition | null;  // 任务创建时保存的定义；旧任务可为空，不能用当前定义替代历史进度
   snapshot_variables?: WorkflowVariable[];
   disabled_node_ids?: string[];  // 任务创建时被取消勾选的节点ID
   scheme_id?: string | null;  // 任务来源执行方案 ID

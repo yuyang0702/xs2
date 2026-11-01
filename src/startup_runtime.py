@@ -14,6 +14,8 @@ from urllib.request import ProxyHandler, build_opener
 import webbrowser
 
 from src.startup import ensure_port_available
+from src.startup_identity import StartupProfile
+from src.startup_instances import write_record, cleanup_record, StartupNotice
 
 
 def add_readiness_route(app, token: str) -> None:
@@ -47,12 +49,24 @@ def _stop_child(process) -> None:
 
 
 def launch_server(root: Path, host: str, port: int, *, log=None,
-                  open_browser=webbrowser.open, timeout=180) -> int:
+                  open_browser=webbrowser.open, timeout=None, profile=None, on_ready=None) -> int:
     """Launch only our child, verify its nonce, and retain its exit code."""
-    ensure_port_available(host, port)
+    if timeout is None:
+        from src.config import WORKFLOW_EXECUTOR_COUNT, WORKFLOW_EXECUTOR_MODE
+        from src.workflow.executor_timing import server_readiness_timeout
+        timeout = server_readiness_timeout(WORKFLOW_EXECUTOR_COUNT if WORKFLOW_EXECUTOR_MODE == 'process' else 1)
+    try:
+        ensure_port_available(host, port)
+    except RuntimeError as error:
+        raise StartupNotice(f'准备完成后端口 {port} 已被其他服务占用，本次没有停止其他进程。请稍后再次双击或检查端口设置。') from error
     token = uuid.uuid4().hex
+    secret = uuid.uuid4().hex + uuid.uuid4().hex
+    profile = profile or StartupProfile.from_root(root)
     env = os.environ.copy()
     env.update(DETERMINFLOW_STARTUP_TOKEN=token, WEB_HOST=host, WEB_PORT=str(port),
+               DETERMINFLOW_STARTUP_SECRET=secret,
+               DETERMINFLOW_STARTUP_PROFILE_ID=profile.profile_id,
+               DETERMINFLOW_LAUNCH_GUARD_FILE=str(profile.guard_file(token)),
                PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     process = subprocess.Popen(
         [sys.executable, str(Path(root) / "run.py"), "--serve"], cwd=str(root), env=env,
@@ -87,7 +101,8 @@ def launch_server(root: Path, host: str, port: int, *, log=None,
                 # Windows venv python.exe may be a redirector whose PID differs
                 # from the serving interpreter. The random per-launch token is
                 # inherited only by this child; a previous server cannot match it.
-                if isinstance(identity, dict) and identity.get("token") == token:
+                if (isinstance(identity, dict) and identity.get("token") == token
+                        and isinstance(identity.get("pid"), int) and identity["pid"] > 0):
                     break
             except (OSError, ValueError):
                 pass
@@ -96,6 +111,11 @@ def launch_server(root: Path, host: str, port: int, *, log=None,
             raise RuntimeError("Server readiness timed out; see the startup log")
         if process.poll() is not None:
             raise RuntimeError("Server exited immediately after readiness")
+        write_record(profile, {'protocol': 1, 'project_root': str(profile.root),
+                              'profile_id': profile.profile_id, 'host': host, 'port': port,
+                              'token': token, 'secret': secret, 'pid': identity['pid']})
+        if on_ready is not None:
+            on_ready()
         print(f"DeterminFlow ready: {url}\nPress Ctrl+C to stop.", flush=True)
         try:
             open_browser(url + "?_launch=" + token)
@@ -106,3 +126,4 @@ def launch_server(root: Path, host: str, port: int, *, log=None,
         _stop_child(process)
         reader.join(timeout=5)
         process.stdout.close()
+        cleanup_record(profile, token)

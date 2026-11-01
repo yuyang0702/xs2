@@ -4,6 +4,7 @@ import { getWritingLibraryItem } from "../lib/api";
 import NovelReferenceContent from "./NovelReferenceContent";
 import NovelReferenceChoice, { referenceText, referenceTitle, ReferenceEvidence } from "./NovelReferenceChoice";
 import type { WritingLibraryUsage } from "../lib/api";
+import WritingLibraryViewpoints from "./WritingLibraryViewpoints";
 
 type Detail = Awaited<ReturnType<typeof getWritingLibraryItem>>;
 type Tab = "profile" | "mechanisms" | "conflicts";
@@ -37,7 +38,7 @@ export default function WritingLibraryReader({ id, usage, attaching, onBack, onA
   return <div className="space-y-5">
     <button onClick={onBack} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" />返回写法库</button>
     <header className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs text-primary">写法阅读</p><h1 className="mt-2 text-2xl font-semibold">{detail?.manifest.name || "正在读取写法…"}</h1><p className="mt-2 text-sm text-muted-foreground">库中分析与本书采用内容分别记录；只有确认采用的内容才进入创作。</p></div><div className="flex flex-wrap gap-2"><button disabled={loading} onClick={() => setRevision(value => value + 1)} className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50"><RefreshCw className={`inline h-4 w-4 ${loading ? "animate-spin" : ""}`} /> {loading ? "读取中…" : "刷新"}</button><button disabled={loading || !detail || attaching || attached} onClick={onAttach} className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">{attaching ? "正在加入…" : attached ? "已加入本书候选" : "加入本书候选"}</button></div></header>
-    {detail && <p className="text-xs leading-6 text-muted-foreground">来源范围：{detail.manifest.source_mode === "serial_chapters" ? "长篇章节样本" : detail.manifest.source_mode === "short_full" ? "短篇全文" : "样本范围待判断"} · 结论仅覆盖已导入内容</p>}
+    {detail && <><p className="text-xs leading-6 text-muted-foreground">来源范围：{detail.manifest.source_mode === "serial_chapters" ? "长篇章节样本" : detail.manifest.source_mode === "short_full" ? "短篇全文" : "样本范围待判断"} · 结论仅覆盖已导入内容</p><WritingLibraryViewpoints metadata={detail.manifest.pov_metadata} /></>}
     {loading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取分析内容…</p>}
     {error && <p role="alert" className="rounded-xl border border-destructive/30 p-4 text-sm text-destructive">读取失败：{error}。可以刷新重试。</p>}
     {detail && <>

@@ -6,10 +6,18 @@ import NovelArchiveContent from './NovelArchiveContent';
 import NovelConfigurationSuggestions from './NovelConfigurationSuggestions';
 import { advisorMarkdown } from '../lib/novel-advisor';
 
+function hasReferenceRecommendations(entry?: NovelAssistantEntry) {
+  return entry?.purpose === 'advisor' && entry.status === 'completed' && !!(
+    entry.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length
+    || entry.advisor_sections?.style_recommendations?.adopted_styles?.length
+    || entry.advisor_sections?.conflict_recommendations?.adopted_conflicts?.length);
+}
+
 export default function NovelAdvisorConversation({
   question, onQuestion, onAsk, entries, busy, loading,
   feedback, now, receipts, onAdopt, onRead, workflowBusy, established, hasReference,
-  librarySize, adoptedCount, onQuickAdopt, onManualSelect, referenceAdoptionBusy = false, referenceAdoptionApplied = false
+  librarySize, adoptedCount, onQuickAdopt, onManualSelect, referenceAdoptionBusy = false, referenceAdoptionApplied = false,
+  referenceModels = [], referenceModel = '', onReferenceModelChange
 }: {
   question: string;
   onQuestion: (value: string) => void;
@@ -31,6 +39,9 @@ export default function NovelAdvisorConversation({
   onManualSelect?: () => void;
   referenceAdoptionBusy?: boolean;
   referenceAdoptionApplied?: boolean;
+  referenceModels?: Array<{value:string;label:string}>;
+  referenceModel?: string;
+  onReferenceModelChange?: (model:string)=>void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const [notice, setNotice] = useState('');
@@ -42,17 +53,15 @@ export default function NovelAdvisorConversation({
   const disabled = busy || loading || workflowBusy;
   const hasLibrary = (librarySize || 0) > 0;
   const hasAdopted = hasReference || (adoptedCount || 0) > 0;
-  const hasRecommendations = !!(latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length
-    || latest?.advisor_sections?.style_recommendations?.adopted_styles?.length
-    || latest?.advisor_sections?.conflict_recommendations?.adopted_conflicts?.length);
+  const hasRecommendations = hasReferenceRecommendations(latest);
   const quick = (value: string) => { onQuestion(value); setFollowup(false); input.current?.focus(); };
 
-  const handleQuickAdopt = async () => {
-    if (!latest || !onQuickAdopt || quickAdopting || referenceAdoptionBusy) return;
+  const handleQuickAdopt = async (entry = latest) => {
+    if (!entry || !onQuickAdopt || disabled || quickAdopting || referenceAdoptionBusy) return;
     setNotice('');
     setQuickAdopting(true);
     try {
-      const result = await onQuickAdopt(latest);
+      const result = await onQuickAdopt(entry);
       setNotice(result.message);
     } catch (error) {
       setNotice(`采用结果尚未确认：${error instanceof Error ? error.message : String(error)}。请核对后台结果。`);
@@ -66,6 +75,15 @@ export default function NovelAdvisorConversation({
       <Sparkles className="h-4 w-4" />
       默认大模型负责分析 · 一句想法就能开始
     </div>
+
+    {onQuickAdopt && onReferenceModelChange && <label className="block rounded-xl border border-border p-3 text-xs">
+      本次兼容检查模型
+      <select aria-label="本次兼容检查模型" value={referenceModel} disabled={disabled || quickAdopting || referenceAdoptionBusy} onChange={event=>onReferenceModelChange(event.target.value)} className="ml-3 max-w-full rounded-lg border border-border bg-background px-2 py-1.5">
+        <option value="">沿用小说顾问模型</option>
+        {referenceModels.map(model=><option key={model.value} value={model.value}>{model.label}</option>)}
+      </select>
+      <span className="mt-2 block text-muted-foreground">仅用于下一次兼容与人物适配检查，不保存到作品或工作流默认配置。</span>
+    </label>}
 
     <div className="flex flex-wrap gap-2">
       {/* 模式1: 原创模式（始终可见）*/}
@@ -150,6 +168,7 @@ export default function NovelAdvisorConversation({
       {latest.advisor_sections?.style_recommendations && <details className="rounded-xl border border-purple-300/25 bg-purple-300/5 p-4"><summary className="cursor-pointer text-sm font-medium">🎨 推荐的文风选择</summary><div className="mt-4 space-y-4 text-xs">{(latest.advisor_sections.style_recommendations.adopted_styles?.length ?? 0) > 0 && <div><p className="mb-2 font-medium text-purple-700">推荐采用的风格：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.style_recommendations.adopted_styles!.map((s, i) => <li key={i}>【{s.priority}】<strong>{s.style}</strong> - {s.reason}（{s.usage_in_story}）</li>)}</ul></div>}{(latest.advisor_sections.style_recommendations.avoid_styles?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-amber-600">⚠️ 避免的风格：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.style_recommendations.avoid_styles!.map((s, i) => <li key={i}><strong>{s.style}</strong>：{s.reason}</li>)}</ul></div>}</div></details>}
       {latest.advisor_sections?.conflict_recommendations && <details className="rounded-xl border border-orange-300/25 bg-orange-300/5 p-4"><summary className="cursor-pointer text-sm font-medium">⚔️ 推荐的冲突模式</summary><div className="mt-4 space-y-4 text-xs">{(latest.advisor_sections.conflict_recommendations.adopted_conflicts?.length ?? 0) > 0 && <div><p className="mb-2 font-medium text-orange-700">推荐采用的冲突：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.conflict_recommendations.adopted_conflicts!.map((c, i) => <li key={i}>【{c.priority}】<strong>{c.conflict}</strong> - {c.reason}（{c.usage_in_story}）</li>)}</ul></div>}{(latest.advisor_sections.conflict_recommendations.avoid_conflicts?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-amber-600">⚠️ 避免的冲突：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.conflict_recommendations.avoid_conflicts!.map((c, i) => <li key={i}><strong>{c.conflict}</strong>：{c.reason}</li>)}</ul></div>}</div></details>}
 
+      {hasLibrary && !hasRecommendations && <p role="status" className="text-sm leading-6 text-muted-foreground">本轮未提供可检查的参考清单。可在之前的讨论中复核已有推荐，或继续讨论补充。</p>}
       <div className="flex flex-wrap gap-3">
         <button disabled={disabled} onClick={() => { setFollowup(true); onQuestion(''); input.current?.focus(); }} className="flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-sm disabled:opacity-50"><MessageCircle className="h-4 w-4" />继续讨论这个方向</button>
 
@@ -169,6 +188,16 @@ export default function NovelAdvisorConversation({
         <button disabled={disabled || !!receipts?.[latest.id] || !(latest.suggestions || []).some(item => item.key === 'premise')} onClick={() => setNotice(onAdopt(latest).message)} className="rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">{receipts?.[latest.id] ? '这套方案已采用' : established ? '采用建议，保留现有进度' : '采用方案，填写设置并继续'}</button>
       </div>
     </section>}
-    {entries.filter(entry => entry.status !== 'running' && entry.id !== latest?.id).length > 0 && <details className="rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm">查看之前的讨论</summary>{entries.filter(entry => entry.status !== 'running' && entry.id !== latest?.id).reverse().map(entry => <div key={entry.id} className="mt-4 border-t border-border pt-4"><p className="text-sm leading-7">{entry.question.length > 140 ? entry.question.slice(0, 140) + '…' : entry.question}</p><button onClick={() => onRead(entry)} className="mt-2 rounded-lg border border-border px-3 py-2 text-xs">{entry.status === 'completed' ? '阅读分析' : '查看失败原因'}</button></div>)}</details>}
+    {entries.filter(entry => entry.status !== 'running' && entry.id !== latest?.id).length > 0 && <details className="rounded-xl border border-border p-4">
+      <summary className="cursor-pointer text-sm">查看之前的讨论</summary>
+      {entries.filter(entry => entry.status !== 'running' && entry.id !== latest?.id).reverse().map(entry => <div key={entry.id} className="mt-4 border-t border-border pt-4">
+        <p className="text-sm leading-7">{entry.question.length > 140 ? entry.question.slice(0, 140) + '…' : entry.question}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button onClick={() => onRead(entry)} className="rounded-lg border border-border px-3 py-2 text-xs">{entry.status === 'completed' ? '阅读分析' : '查看失败原因'}</button>
+          {onQuickAdopt && hasReferenceRecommendations(entry) && <button disabled={disabled || quickAdopting || referenceAdoptionBusy} onClick={() => void handleQuickAdopt(entry)} className="rounded-lg border border-border px-3 py-2 text-xs disabled:opacity-50">检查兼容并采用本轮推荐</button>}
+        </div>
+        {onQuickAdopt && hasReferenceRecommendations(entry) && <p className="mt-2 text-xs leading-6 text-muted-foreground">按本书当前设置和人物档案重新检查，历史推荐不会直接生效。</p>}
+      </div>)}
+    </details>}
   </div>;
 }

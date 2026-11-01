@@ -130,6 +130,21 @@ def _build_openai_compatible_params(
     }
 
 
+def _build_volcengine_params(params: dict[str, Any], _provider: dict) -> dict:
+    # Ark Chat uses its native thinking switch, while retaining OpenAI messages.
+    # Disable thinking without forwarding a conflicting inherited effort.
+    extra_body: dict[str, Any] = {}
+    thinking = params.get("thinking_enabled")
+    if thinking is not None:
+        extra_body["thinking"] = {"type": "enabled" if thinking else "disabled"}
+    if thinking is not False and params.get("reasoning_effort") is not None:
+        extra_body["reasoning_effort"] = params["reasoning_effort"]
+    return {
+        "client_kwargs": _pick(params, "temperature", "top_p"),
+        "extra_body": extra_body,
+    }
+
+
 def _build_anthropic_params(params: dict[str, Any], provider: dict) -> dict:
     client_kwargs: dict[str, Any] = {}
     hyperparams = provider.get("hyperparameter_values", {})
@@ -230,6 +245,18 @@ PROVIDER_ADAPTERS: dict[str, dict[str, Any]] = {
             },
         ),
         "build_request": _build_openai_params,
+    },
+    "volcengine": {
+        "api_format": "openai",
+        "model_params": _field_schema(
+            ("thinking_enabled", "reasoning_effort", "temperature", "top_p",
+             "response_format", "stream_chunk_timeout"),
+            overrides={"reasoning_effort": {
+                "options": ["low", "medium", "high", "xhigh", "max"],
+                "default": "medium",
+            }},
+        ),
+        "build_request": _build_volcengine_params,
     },
     "anthropic": {
         "api_format": "anthropic",

@@ -499,6 +499,7 @@ async def import_url(payload: UrlImport, request: Request):
 @router.get("/library")
 async def list_writing_library():
     """列出跨作品可复用的写法蒸馏结果。"""
+    metadata_for = _library_metadata_service()
     with _lock:
         _library_root.mkdir(parents=True, exist_ok=True)
         items = []
@@ -509,8 +510,19 @@ async def list_writing_library():
             if not isinstance(manifest, dict) or not manifest.get("id"):
                 continue
             choices = with_reference_choices(read_json_file(folder / "candidates.json", {}))
-            items.append({**manifest, "style_count": len(choices["style_choices"]), "conflict_count": len(choices["conflict_choices"])})
+            metadata = metadata_for(manifest, read_json_file(folder / "profile.json", {}), choices)
+            items.append({**metadata, "style_count": len(choices["style_choices"]), "conflict_count": len(choices["conflict_choices"])})
     return {"items": items}
+
+
+def _library_metadata_service():
+    try:
+        normalizer = getattr(console_service(), "library_metadata", None)
+    except ValueError as error:
+        raise HTTPException(503, str(error)) from error
+    if not callable(normalizer):
+        raise HTTPException(503, "小说插件缺少写法库视角分析服务，请更新插件。")
+    return normalizer
 
 
 @router.get("/library/mechanism-recommendations")
@@ -560,6 +572,7 @@ async def get_writing_library_item(library_id: str, request: Request, workspace:
         "profile": read_json_file(folder / "profile.json", {}),
         "candidates": with_reference_choices(read_json_file(folder / "candidates.json", {"candidates": []})),
     }
+    result["manifest"] = _library_metadata_service()(manifest, result["profile"], result["candidates"])
 
     # 如果提供了 workspace，计算本书的使用情况
     if workspace:

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {test,type TestContext} from 'node:test';
-import {createElement} from 'react';
+import React, {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import NovelReferenceAdoptionStatus from '../components/NovelReferenceAdoptionStatus';
 import NovelAdvisorConversation from '../components/NovelAdvisorConversation';
 import type {NovelAssistantEntry} from './api';
+Object.assign(globalThis, {React});
 import {
   startReferenceAdoption, restoreReferenceAdoption, recoverReferenceAdoption, referenceAdoptionOutcome,
   mergeReferenceAdoption, ReferenceAdoptionRejectedError, type ReferenceAdoptionJob,
@@ -39,6 +40,14 @@ test('adoption waits for the saved result and sends the exact advisor source onc
   const poll = new URL(seen[1].url,'http://localhost');
   assert.equal(poll.searchParams.get('request_id'),'request-1');
   assert.equal(poll.searchParams.get('workspace'),'books/中文');
+});
+
+test('a one-check model is sent only with the adoption request', async t => {
+  const seen: Array<{url:string;init?:RequestInit}> = [];
+  responses(t,[{job:applied}],seen);
+  await startReferenceAdoption({...payload,model_override:'provider:backup'});
+  assert.equal(JSON.parse(String(seen[0].init?.body)).model_override,'provider:backup');
+  assert.equal(seen.length,1);
 });
 
 test('no source match stays unsuccessful and does not start a replacement job',async t=>{
@@ -156,4 +165,29 @@ test('the advisor offers compatibility checking for style recommendations and re
   const button=[...recheck.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].find(match=>match[2].includes('重新检查兼容与人物适配'));
   assert.ok(button,'a saved result must allow explicit rechecking after characters are created');
   assert.ok(!/\sdisabled(?:=|\s|$)/.test(button[1]));
+});
+
+test('a later discussion without structured references can recheck an earlier saved recommendation',()=>{
+  const earlier:NovelAssistantEntry={id:'earlier-advisor',question:'有可复核来源的上一轮',reply:'先核对再采用',status:'completed',purpose:'advisor',source:'llm',stage:'小说顾问',created_at:'before',advisor_sections:{direction:'本书方向',hook:'人物选择',writing:'保持有限视角',risks:'先确认兼容',style_recommendations:{adopted_styles:[{library_id:'source-1',choice_id:'style-1',style:'有限视角',priority:'HIGH',reason:'待核对',usage_in_story:'适配本书叙述'}]}}};
+  const latest:NovelAssistantEntry={...earlier,id:'latest-advisor',question:'只补充人物讨论',advisor_sections:{direction:'保留现有角色事实',hook:'保持看点',writing:'保持写法方向',risks:'保留边界'}};
+  const html=renderToStaticMarkup(createElement(NovelAdvisorConversation,{
+    question:'',onQuestion:()=>{},onAsk:()=>{},entries:[earlier,latest],busy:false,loading:false,
+    feedback:'',now:0,onAdopt:()=>({success:true,message:''}),onRead:()=>{},workflowBusy:false,
+    established:true,hasReference:false,adoptedCount:0,librarySize:1,onQuickAdopt:async()=>({success:true,message:''}),
+  }));
+  assert.match(html,/本轮未提供可检查的参考清单/);
+  assert.match(html,/检查兼容并采用本轮推荐/);
+  assert.match(html,/按本书当前设置和人物档案重新检查/);
+});
+
+test('one-check model selection explicitly leaves saved defaults unchanged',()=>{
+  const html=renderToStaticMarkup(createElement(NovelAdvisorConversation,{
+    question:'',onQuestion:()=>{},onAsk:()=>{},entries:[],busy:false,loading:false,
+    feedback:'',now:0,onAdopt:()=>({success:true,message:''}),onRead:()=>{},workflowBusy:false,
+    established:true,hasReference:false,onQuickAdopt:async()=>({success:true,message:''}),
+    referenceModels:[{value:'provider:backup',label:'备用模型'}],referenceModel:'provider:backup',onReferenceModelChange:()=>{},
+  }));
+  assert.match(html,/本次兼容检查模型/);
+  assert.match(html,/不保存到作品或工作流默认配置/);
+  assert.match(html,/<option value="provider:backup" selected="">备用模型<\/option>/);
 });

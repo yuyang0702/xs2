@@ -60,7 +60,7 @@ export default function AddModelProviderDialog({
     setProviderId(nextProviderId(type, existingProviderIds));
     setName(schema?.display_name || "");
     setBaseUrl(schema?.default_base_url || "");
-    setModels([]);
+    setModels([...(schema?.default_models || [])]);
     setError(null);
   }, [existingProviderIds, schemas]);
 
@@ -240,7 +240,7 @@ export default function AddModelProviderDialog({
                       className="min-h-11 w-full rounded-lg border border-border bg-secondary px-3 font-mono text-sm text-foreground outline-none focus:border-primary"
                     />
                     <p className="mt-2 text-xs text-muted-foreground">
-                      完整 API Base URL，包含版本路径（v1，不带末尾斜杠/）
+                      完整 API Base URL，包含版本路径（如 /v1 或 /api/v3，不带末尾斜杠）
                     </p>
                   </div>
                 )}
