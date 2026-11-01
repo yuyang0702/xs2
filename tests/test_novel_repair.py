@@ -97,6 +97,36 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
         d=json.loads(self.task.read_text());d['status']='running';self.task.write_text(json.dumps(d))
         with self.assertRaisesRegex(ValueError,'任务正在处理'):repair_context(self.root,'0001',self.wfs)
 
+    def test_applied_plan_recovery_rechecks_source_before_restarting(self):
+        source = repair_context(self.root, '0001', self.wfs)
+        entry = {'id':'recover', 'status':'completed', 'purpose':'reader_repair', 'repair_source':source}
+        result = prepare_repair(self.root, entry, '仅修改本章')
+        entry.update(applied_at='now', feedback_path=result['feedback_path'])
+        self.body.write_text('本章后来已经返修，不可套回旧方案', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '已过期'):
+            prepare_repair(self.root, entry, '仅修改本章')
+
+    async def test_repair_application_keeps_workflow_node_model_defaults(self):
+        from src.web import novel_routes
+        identifier = '5cc02f02-55b6-435b-9361-322cf814dd62'
+        entry = {'id':identifier, 'chapter':'0001', 'status':'completed', 'purpose':'reader_repair',
+                 'repair_source':repair_context(self.root, '0001', self.wfs)}
+        jobs = SimpleNamespace(history=lambda root:[entry], _write=lambda root, entries:None)
+        manager = SimpleNamespace(_ws_manager=SimpleNamespace(resolve_workflow_workspace=lambda *a, **kw:self.root))
+        request = SimpleNamespace()
+        with (
+            patch.object(novel_routes, '_ensure_http_mutation_allowed'),
+            patch.object(novel_routes, '_ensure_workflow_writable', return_value=manager),
+            patch.object(novel_routes, 'require_manual_control'),
+            patch.object(novel_routes, '_assistant_jobs', return_value=jobs),
+            patch.object(novel_routes, 'ensure_idle'),
+            patch('src.core.model_manager.get_model_manager', return_value=SimpleNamespace(get_default_model=lambda:'system:analysis')),
+        ):
+            result = await novel_routes.apply_repair_plan(novel_routes.RepairApply(
+                workflow_id='xs2-novel-flywheel-polish', workspace=str(self.root), entry_id=identifier,
+                plan='扩写实际交锋，沿用写手和分析节点各自模型'), request)
+        self.assertEqual(result['model_id'], '')
+
 
 # Run adviser tests against the real source plugin in an isolated catalog.
 import pytest

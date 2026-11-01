@@ -67,11 +67,22 @@ def start(payload: ProjectSave, request: Request):
             raise HTTPException(400, "请先完成参考准备及方向确认，再启动自动创作")
         incoming.update(autoNext=True, autoController="server-v1", autoArmed=True,
                         autoPauseReason="", _revision=revision + 1, persisted=True)
-        if existing.get("autoPending"):
+        pending = existing.get("autoPending")
+        if pending and pending.get("task_id") and pending.get("workflow_id"):
+            try:
+                prior_task = manager.get_task(pending["workflow_id"], pending["task_id"])
+            except FileNotFoundError:
+                prior_task = None
+            if prior_task and prior_task.get("status") == "completed":
+                workspace = prior_task.get("workspace_override")
+                if workspace and Path(workspace).resolve() != root:
+                    raise HTTPException(409, "待恢复任务不属于本书，请检查任务归属")
+                pending = None
+        if pending:
             if (incoming.get("stageId") != existing.get("stageId") or
                     incoming.get("values", {}).get("chapter_number") != existing.get("values", {}).get("chapter_number")):
                 raise HTTPException(409, "当前步骤仍有待恢复任务，请先恢复该步骤")
-            incoming["autoPending"] = existing["autoPending"]
+            incoming["autoPending"] = pending
             incoming["refs"] = existing.get("refs", {})
         else:
             incoming.pop("autoPending", None)

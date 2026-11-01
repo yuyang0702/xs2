@@ -109,10 +109,13 @@ def verify_source(root: Path, source: dict) -> None:
 def prepare_repair(root: Path, entry: dict, plan: str) -> dict:
     if entry.get('status') != 'completed' or entry.get('purpose') != 'reader_repair':
         raise ValueError('请先完成读者返修方案分析。')
-    if entry.get('applied_at'):
-        return {'feedback_path': entry['feedback_path'], 'already_applied': True}
     source = entry.get('repair_source', {})
     verify_source(root, source)
+    if entry.get('applied_at'):
+        feedback_path = entry['feedback_path']
+        if not (root / feedback_path).is_file():
+            raise ValueError('已确认的返修意见文件缺失，请重新规划返修。')
+        return {'feedback_path': feedback_path, 'already_applied': True}
     if not plan.strip():
         raise ValueError('返修方案不能为空。')
     chapter = source['chapter']

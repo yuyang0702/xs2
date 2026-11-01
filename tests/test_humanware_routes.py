@@ -121,3 +121,38 @@ def test_plugin_rejects_file_symlink_outside_workspace(voice_client, tmp_path):
     assert client.get('/api/humanware/voice-file', params=payload(book)).status_code == 409
     assert client.post('/api/humanware/voice-file', json=payload(book, content='changed')).status_code == 409
     assert outside.read_text(encoding='utf-8') == 'keep'
+
+
+def test_individual_voice_edit_returns_profile_reference_and_preserves_other_character(voice_client):
+    client, book, _, _ = voice_client
+    voice = book / 'meta/character_voice.md'
+    voice.write_text('# 声音\n\n## 林木\n\n寡言。\n\n## 陈枝\n\n原样保留。\n', encoding='utf-8')
+    document = client.get('/api/humanware/voice-file', params=payload(book)).json()
+    assert 'characters' in document, 'voice API must expose plugin-owned character views'
+    assert document['characters'][0]['profile'].strip() == '沉默。'
+    saved = client.post('/api/humanware/voice-character', json=payload(book,
+        character_id=document['characters'][0]['id'], expected_revision=document['revision'], content='先听再说。'))
+    assert saved.status_code == 200, saved.text
+    assert '## 陈枝\n\n原样保留。\n' in voice.read_text(encoding='utf-8')
+    retry = client.post('/api/humanware/voice-character', json=payload(book,
+        character_id=document['characters'][0]['id'], expected_revision=document['revision'], content='旧页面修改'))
+    assert retry.status_code == 409
+    assert '先听再说。' in voice.read_text(encoding='utf-8')
+
+
+def test_individual_voice_edit_respects_busy_and_owner_policy(voice_client, monkeypatch):
+    client, book, manager, _ = voice_client
+    voice = book / 'meta/character_voice.md'
+    voice.write_text('## 林木\n旧声音', encoding='utf-8')
+    document = client.get('/api/humanware/voice-file', params=payload(book)).json()
+    assert 'characters' in document
+    body = payload(book, character_id=document['characters'][0]['id'],
+                   expected_revision=document['revision'], content='新的声音')
+    manager.is_workflow_owner_enabled = lambda _: False
+    assert client.post('/api/humanware/voice-character', json=body).status_code == 409
+    manager.is_workflow_owner_enabled = lambda _: True
+    def busy(*args):
+        raise ValueError('workspace busy')
+    monkeypatch.setattr(humanware_routes, 'ensure_idle', busy)
+    assert client.post('/api/humanware/voice-character', json=body).status_code == 409
+    assert voice.read_text(encoding='utf-8') == '## 林木\n旧声音'

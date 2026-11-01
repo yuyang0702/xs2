@@ -30,3 +30,15 @@ test('automatic repairs retain serial batch limits and count only an adopted pla
   assert.equal(next.autoRepairPlanId,'');
   assert.equal(next.values.chapter_number,'0012');
 });
+
+test('a newly approved repair cannot recover a prior launch with empty feedback', () => {
+  const old = {values:{chapter_number:'0001'}, completed:['polish','reader-sim'],
+    refs:{polish:{task_id:'old-polish'}},
+    autoPending:{stage:'polish', task_id:'old-polish', before_task_ids:[],
+      parameters:{author_feedback_file:''}}};
+  const next = beginReaderRepair(old,6,'quality/repairs/0001/new/instructions.md');
+  assert.equal(next.autoPending,null);
+  assert.equal(next.values.author_feedback_file,'quality/repairs/0001/new/instructions.md');
+  assert.equal(next.refs.polish,undefined);
+  assert.equal(old.autoPending.task_id,'old-polish');
+});

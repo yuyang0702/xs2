@@ -45,7 +45,7 @@ export default function NovelRepairPanel({workspace, chapter, project, ready, re
   const plans = entries.filter(item => item.purpose === 'reader_repair' && item.chapter === chapter);
   const latest = plans[plans.length - 1];
   const plan = [...plans].reverse().find(item => item.status === 'completed');
-  useEffect(() => {setDraft(plan?.applied_plan || plan?.reply || ''); setEditing(false);}, [plan?.id]);
+  useEffect(() => {setDraft(plan?.applied_plan || plan?.reply || ''); setEditing(false);}, [plan?.id, plan?.applied_plan, plan?.reply]);
   const busy = loading || submitting || !!running || applying;
   const ask = async () => {
     if (busy || guard.current || !ready) return;
@@ -62,7 +62,7 @@ export default function NovelRepairPanel({workspace, chapter, project, ready, re
     finally {guard.current = false; if (active.current) setSubmitting(false);}
   };
   const apply = async () => {
-    if (!plan || busy || plan.applied_at || appliedGuard.current) return;
+    if (!plan || busy || appliedGuard.current) return;
     appliedGuard.current = true; setApplying(true); setFeedback('正在保存已确认意见，准备启动原有返修工作流…');
     try {
       const result = await applyNovelRepairPlan({workflow_id:novelWorkflowId("polish"), workspace, entry_id:plan.id, plan:draft});
@@ -86,7 +86,7 @@ export default function NovelRepairPanel({workspace, chapter, project, ready, re
       <h3 className="font-medium">第 {Number(chapter)} 章 · AI 返修方案</h3>
       <p className="mt-2 text-xs leading-6 text-muted-foreground">依据：本章正文 + 完整读者报告（问题、优先级、保留约束）。分析时间：{new Date(plan.created_at).toLocaleString('zh-CN')}。</p>
       {plan.reader_summary && <p className="mt-3 rounded-lg bg-secondary/40 p-3 text-sm leading-7">读者结论：{plan.reader_summary}</p>}
-      <button disabled={busy || !!plan.applied_at || !draft.trim()} onClick={() => void apply()} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">{applying && <Loader2 className="h-4 w-4 animate-spin"/>}{applying ? '正在准备返修…' : plan.applied_at ? '此方案已交给返修流程' : '按此方案返修并复评'}</button>
+      <button disabled={busy || !draft.trim()} onClick={() => void apply()} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">{applying && <Loader2 className="h-4 w-4 animate-spin"/>}{applying ? '正在准备返修…' : plan.applied_at ? '继续此方案返修并复评' : '按此方案返修并复评'}</button>
       <p className="mt-2 text-xs leading-6 text-muted-foreground">请先查看下方方案，必要时调整，再点击上方按钮确认执行。</p>
       <div className="mt-4 max-h-[540px] overflow-auto"><NovelArchiveContent content={draft}/></div>
       {!plan.applied_at && <><button disabled={busy} onClick={() => setEditing(value => !value)} className="mt-3 rounded-lg border border-border px-3 py-2 text-sm">{editing ? '收起编辑' : '调整返修意见'}</button>{editing && <textarea aria-label="返修方案" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} rows={12} className="mt-3 w-full rounded-xl border border-border bg-background p-3 text-sm leading-7"/>}</>}

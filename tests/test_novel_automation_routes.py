@@ -169,6 +169,31 @@ def test_paused_pending_task_resumes_after_controller_restart_without_duplicate_
     assert control.manager.started == ["pending-1"]
 
 
+def test_completed_dispatch_does_not_replace_new_repair_feedback_or_refs(control):
+    control.client.post('/api/novel-console/automation/start', json=payload(control))
+    ref = control.service._next_dispatch(control.root)
+    task = control.manager.get_task(ref['workflow_id'], ref['task_id'])
+    task['status'] = 'completed'
+    control.manager.save(task)
+    control.client.post('/api/novel-console/automation/stop', json=payload(control))
+    paused = saved(control)
+    requested = {**paused, 'autoPending':None, 'refs':{},
+                 'values':{**paused['values'], 'author_feedback_file':'quality/repairs/new/instructions.md'}}
+    response = control.client.post('/api/novel-console/automation/start', json=payload(control, requested))
+    assert response.status_code == 200, response.text
+    result = response.json()['state']
+    assert not result.get('autoPending')
+    assert result['refs'] == {}
+    assert result['values']['author_feedback_file'] == 'quality/repairs/new/instructions.md'
+
+
+def test_completed_boundary_drops_dispatch_receipt_before_pausing(control):
+    data = saved(control)
+    data['autoPending'] = {'task_id':'already-completed'}
+    control.service._apply_action(control.root, data, {'action':'finish', 'reason':'评估完成'})
+    assert 'autoPending' not in saved(control)
+
+
 @pytest.mark.parametrize("endpoint", ["start", "stop", "status"])
 @pytest.mark.parametrize("workspace", ["", "../../outside"])
 def test_invalid_workspace_is_rejected_without_fallback_mutation(control, endpoint, workspace):

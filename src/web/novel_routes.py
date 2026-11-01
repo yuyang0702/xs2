@@ -1167,8 +1167,9 @@ async def apply_repair_plan(payload: RepairApply, request: Request):
         if not result['already_applied']:
             entry.update(applied_at=datetime.now(timezone.utc).isoformat(), feedback_path=result['feedback_path'], applied_plan=payload.plan)
             jobs._write(root, entries)
-        from src.core.model_manager import get_model_manager
-        return {**result, 'chapter': entry['chapter'], 'model_id': get_model_manager().get_default_model()}
+        # Each revision/analysis node retains its workflow model assignment.
+        # A system-wide override would replace the writer model as well.
+        return {**result, 'chapter': entry['chapter'], 'model_id': ''}
 
 
 @router.put("/projects")

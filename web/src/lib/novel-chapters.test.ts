@@ -31,6 +31,14 @@ test("automatic serial continuation launches only target chapter and keeps batch
   assert.equal(next.autoLaunchStage,"mvp");
 });
 
+test("chapter assessment clears optional feedback instead of selecting a nonexistent default file", () => {
+  const current = {...project, values:{...project.values,
+    author_feedback_file:"quality/repairs/0001/old.md"}};
+  const next = selectProductionChapter(current,{...context,chapter:"0001",has_body:true},"reader-sim",7,true);
+  assert.equal(next.values.author_feedback_file,"");
+  assert.equal(current.values.author_feedback_file,"quality/repairs/0001/old.md");
+});
+
 test("targeted revision uses target chapter refs and never inherits another chapter feedback", () => {
   const current = {...project,values:{...project.values,chapter_number:"0003",author_feedback_file:"quality/repairs/0003/old.md"}};
   const target = {...context,chapter:"0001",has_body:true,refs:{mvp:project.refs.mvp},completed:["mvp"]};

@@ -21,6 +21,13 @@ class VoiceRequest(BaseModel):
 
 class SaveVoiceRequest(VoiceRequest):
     content: str = Field(max_length=500_000)
+    expected_revision: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+
+
+class SaveVoiceCharacterRequest(VoiceRequest):
+    character_id: str = Field(min_length=1, max_length=160)
+    expected_revision: str = Field(pattern=r'^[a-f0-9]{64}$')
+    content: str = Field(max_length=500_000)
 
 
 @lru_cache(maxsize=4)
@@ -66,15 +73,19 @@ def _workspace(request: Request, workflow_id: str, workspace: str, *, mutate=Fal
         raise HTTPException(400, str(error)) from error
 
 
-def _operate(request: Request, workflow_id: str, workspace: str, operation: str, content=None):
-    root = _workspace(request, workflow_id, workspace, mutate=operation in {'save', 'generate'})
+def _operate(request: Request, workflow_id: str, workspace: str, operation: str, *args):
+    mutations = {'save', 'generate', 'save_character'}
+    root = _workspace(request, workflow_id, workspace, mutate=operation in mutations)
     support = _voice_support()
     try:
-        if operation in {'save', 'generate'}:
+        if operation in mutations:
             from .novel_routes import require_manual_control
             require_manual_control(request, root)
             ensure_idle(root, DATA_DIR / 'workflows')
-        return getattr(support, operation)(root, content) if operation == 'save' else getattr(support, operation)(root)
+        handler = getattr(support, operation, None)
+        if not callable(handler):
+            raise HTTPException(409, '角色声音插件尚未更新，请更新插件并重新启动。')
+        return handler(root, *args)
     except FileExistsError as error:
         raise HTTPException(409, '角色声音文件已存在，请直接编辑；生成模板不会覆盖现有内容。') from error
     except (ValueError, OSError) as error:
@@ -93,7 +104,14 @@ async def get_voice_file(request: Request, workflow_id: str, workspace: str):
 
 @router.post('/voice-file')
 async def save_voice_file(payload: SaveVoiceRequest, request: Request):
-    return _operate(request, payload.workflow_id, payload.workspace, 'save', payload.content)
+    args = (payload.content, payload.expected_revision) if payload.expected_revision else (payload.content,)
+    return _operate(request, payload.workflow_id, payload.workspace, 'save', *args)
+
+
+@router.post('/voice-character')
+async def save_voice_character(payload: SaveVoiceCharacterRequest, request: Request):
+    return _operate(request, payload.workflow_id, payload.workspace, 'save_character',
+                    payload.character_id, payload.content, payload.expected_revision)
 
 
 @router.post('/generate-voice-file')

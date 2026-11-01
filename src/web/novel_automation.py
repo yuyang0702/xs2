@@ -84,6 +84,9 @@ class NovelAutomation:
 
     def _apply_action(self, root, state, action):
         state.update(action.get("updates", {}))
+        # This action follows a verified terminal task; its launch receipt must
+        # not be recovered as a new revision after the controller stops.
+        state.pop("autoPending", None)
         kind = action["action"]
         if kind in {"pause", "finish"}:
             return self._pause(root, state, action.get("reason", "自动创作已结束。"))
@@ -99,7 +102,6 @@ class NovelAutomation:
             stages = self.policy().STAGES
             if stage in stages:
                 state["index"] = stages.index(stage)
-        state.pop("autoPending", None)
         self._save(root, state)
         return state
 

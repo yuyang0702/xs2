@@ -20,10 +20,11 @@ export function selectProductionChapter<T extends ChapterProject>(
   const chapterDrafts = {...project.chapterDrafts,
     [project.values.chapter_number]: Object.fromEntries(draftKeys.map(key => [key, project.values[key] || ""]))};
   const draft = chapterDrafts[context.chapter];
+  const current: Omit<T, 'autoPending'> = project;
   // Book preparation and adopted style survive; production refs are chapter-owned.
-  return {...project, index, stageId, autoNext: automatic,
+  return {...current, index, stageId, autoNext: automatic,
     autoScope: automatic ? "serial_batch" as const : "manual" as const,
-    autoLaunchStage: automatic ? stageId : "", autoRepairPlanId: "", autoPauseReason: "",
+    autoLaunchStage: automatic ? stageId : "", autoPending: null, autoRepairPlanId: "", autoPauseReason: "",
     repairReviewOnly: false, assessmentOnly: false, repairModel: "", readerRepairCount: 0,
     continuationIssue: null, chapterDrafts,
     refs: {...Object.fromEntries(Object.entries(project.refs).filter(([id]) => !PRODUCTION.includes(id))), ...context.refs},
@@ -34,5 +35,5 @@ export function selectProductionChapter<T extends ChapterProject>(
       ...(draft ? Object.fromEntries(Object.entries(draft).filter(([, value]) => value !== "")) : {}),
       chapter_number: context.chapter, prev_chapter: String(Number(context.chapter) - 1).padStart(4, "0"),
       latest_chapter: String(Math.max(Number(project.values.latest_chapter) || 0, Number(context.chapter) - 1)).padStart(4, "0"),
-      author_feedback_file: "quality/author_feedback.md"}};
+      author_feedback_file: ""}};
 }
