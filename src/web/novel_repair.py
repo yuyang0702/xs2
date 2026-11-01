@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import tempfile
+from .novel_plugin import task_files
 
 
 def digest(path: Path) -> str:
@@ -11,11 +12,11 @@ def digest(path: Path) -> str:
 
 
 def ensure_idle(root: Path, workflows_dir: Path) -> None:
-    for stage in ('build', 'character', 'story-plan', 'outline', 'mvp', 'polish', 'reader-sim', 'post-hoc', 'export'):
-        for file in (workflows_dir / f'xs2-novel-flywheel-{stage}/tasks').glob('*.json'):
-            task = json.loads(file.read_text(encoding='utf-8'))
-            if task.get('status') in {'pending', 'running', 'preparing', 'pre_running', 'retry_waiting', 'resume_pending'} and task.get('workspace_override') and Path(task['workspace_override']).resolve() == root.resolve():
-                raise ValueError('本书仍有创作或评估任务正在处理，请完成后再规划或启动返修。')
+    for file in task_files(workflows_dir):
+        task = json.loads(file.read_text(encoding='utf-8'))
+        if task.get('status') in {'pending', 'running', 'preparing', 'pre_running', 'retry_waiting', 'resume_pending'} and task.get('workspace_override') and Path(task['workspace_override']).resolve() == root.resolve():
+            raise ValueError('本书仍有创作或评估任务正在处理，请完成后再规划或启动返修。')
+
 
 
 def reader_report_path(root: Path, chapter: str) -> Path:
@@ -30,7 +31,7 @@ def preserve_legacy_report(root: Path, workflows_dir: Path) -> None:
         return
     data = json.loads(report.read_text(encoding='utf-8'))
     tasks = []
-    for path in (workflows_dir / 'xs2-novel-flywheel-reader-sim/tasks').glob('*.json'):
+    for path in task_files(workflows_dir, 'reader-sim'):
         task = json.loads(path.read_text(encoding='utf-8'))
         if (task.get('status') == 'completed' and task.get('workspace_override')
                 and Path(task['workspace_override']).resolve() == root.resolve()):
@@ -71,7 +72,7 @@ def repair_context(root: Path, chapter: str, workflows_dir: Path, require_idle=T
     # The existing reader workflow writes one shared report. Never apply another
     # chapter's most recent evaluation to the chapter currently being browsed.
     tasks = []
-    for file in (workflows_dir / 'xs2-novel-flywheel-reader-sim/tasks').glob('*.json'):
+    for file in task_files(workflows_dir, 'reader-sim'):
         task = json.loads(file.read_text(encoding='utf-8'))
         if task.get('status') == 'completed' and task.get('workspace_override') and Path(task['workspace_override']).resolve() == root.resolve():
             tasks.append(task)

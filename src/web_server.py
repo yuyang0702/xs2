@@ -54,6 +54,7 @@ from src.web.api_routes import router as api_router
 from src.roundtable.routes import router as roundtable_router
 from src.web.workflow_routes import router as workflow_router, tasks_router
 from src.web.novel_routes import router as novel_console_router
+from src.web.novel_automation_routes import router as novel_automation_router
 from src.web.workflow_node_control_routes import router as workflow_node_control_router
 from src.web.attachment_routes import router as attachment_router
 from src.web.mention_routes import router as mention_router
@@ -111,6 +112,7 @@ async def lifespan(app: FastAPI):
     cron_scheduler = None
     memory_runtime = None
     workflow_mgr = None
+    novel_automation = None
     workflow_executor_pool = None
     inline_executor_leases = None
     account_service = None
@@ -118,6 +120,8 @@ async def lifespan(app: FastAPI):
 
     async def _cleanup_on_failure():
         """初始化失败时按创建顺序的逆序清理已分配资源。"""
+        if novel_automation:
+            await novel_automation.stop()
         if workflow_executor_pool:
             try:
                 await workflow_executor_pool.stop()
@@ -662,6 +666,23 @@ async def lifespan(app: FastAPI):
         app.state.approval_manager = approval_mgr
         app.state.tool_registry = registry
         app.state.workflow_manager = workflow_mgr
+        if not is_workflow_executor:
+            from src.web.novel_automation import NovelAutomation
+            from src.web.novel_routes import _lock, known_workspaces
+            from src.web.novel_plugin import workflow_resources, console_service
+            from src.web.novel_assistant import NovelAssistantJobs
+            assistant_jobs = NovelAssistantJobs()
+            app.state.novel_assistant_jobs = assistant_jobs
+            novel_automation = NovelAutomation(
+                workflow_mgr,
+                resources=lambda: workflow_resources(extension_manager, workflow_mgr),
+                roots=known_workspaces,
+                policy=lambda: console_service().production,
+                assistant_jobs=assistant_jobs, lock=_lock,
+                workflows_dir=WORKFLOWS_DIR,
+            )
+            app.state.novel_automation = novel_automation
+            await novel_automation.start()
         app.state.cron_scheduler = cron_scheduler
         app.state.cron_job_manager = cron_job_mgr
         app.state.workflow_executor_pool = workflow_executor_pool
@@ -692,6 +713,8 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("正在关闭 Web 服务...")
+    if novel_automation:
+        await novel_automation.stop()
     try:
         if workflow_executor_pool:
             await workflow_executor_pool.stop()
@@ -834,6 +857,7 @@ def create_app(extension_manager: ExtensionManager | None = None) -> FastAPI:
     application.include_router(roundtable_router)
     application.include_router(workflow_router)
     application.include_router(novel_console_router)
+    application.include_router(novel_automation_router)
     application.include_router(tasks_router)
     application.include_router(workflow_node_control_router)
     application.include_router(attachment_router)

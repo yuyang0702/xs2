@@ -1,3 +1,4 @@
+import {novelWorkflowId} from "../lib/novel-resources";
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Sparkles, WandSparkles } from 'lucide-react';
 import { askNovelAssistant, applyNovelRepairPlan, fetchNovelAssistantHistory, type NovelAssistantEntry } from '../lib/api';
@@ -26,7 +27,7 @@ export default function NovelRepairPanel({workspace, chapter, project, ready, re
     const poll = async () => {
       let again = false;
       try {
-        const data = await fetchNovelAssistantHistory('xs2-novel-flywheel-build', workspace);
+        const data = await fetchNovelAssistantHistory(novelWorkflowId("build"), workspace);
         if (!mounted) return;
         setEntries(data.entries);
         again = data.entries.some(item => item.status === 'running');
@@ -50,7 +51,7 @@ export default function NovelRepairPanel({workspace, chapter, project, ready, re
     if (busy || guard.current || !ready) return;
     guard.current = true; setSubmitting(true); setFeedback('正在提交，读取本章正文和完整读者报告…');
     try {
-      const result = await askNovelAssistant({workflow_id:'xs2-novel-flywheel-build', workspace,
+      const result = await askNovelAssistant({workflow_id:novelWorkflowId("build"), workspace,
         request_id:crypto.randomUUID(), purpose:'reader_repair', chapter, project, stage:'读者评估后返修规划',
         question:`请根据第${chapter}章的正文及最新读者评估，规划定向返修，逐项回应问题并给出可执行修改和复评验收点。${extra.trim() ? '\n用户追加意见：'+extra.trim() : ''}`});
       if (!active.current) return;
@@ -64,7 +65,7 @@ export default function NovelRepairPanel({workspace, chapter, project, ready, re
     if (!plan || busy || plan.applied_at || appliedGuard.current) return;
     appliedGuard.current = true; setApplying(true); setFeedback('正在保存已确认意见，准备启动原有返修工作流…');
     try {
-      const result = await applyNovelRepairPlan({workflow_id:'xs2-novel-flywheel-polish', workspace, entry_id:plan.id, plan:draft});
+      const result = await applyNovelRepairPlan({workflow_id:novelWorkflowId("polish"), workspace, entry_id:plan.id, plan:draft});
       if (!active.current) return;
       if (result.already_applied) {setFeedback('这份方案已准备好，正在恢复对应章节的返修流程…');}
       await onRepair(result.feedback_path, result.model_id);

@@ -1,3 +1,5 @@
+import NovelResourceGate from "../components/NovelResourceGate";
+import {novelWorkflowId} from "../lib/novel-resources";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
@@ -11,8 +13,8 @@ import {
 } from "lucide-react";
 import { createTask, getTask, listTasks, readWorkflowWorkspaceFile, runTask } from "../lib/api";
 
-const MARKET_WORKFLOW = "xs2-novel-flywheel-market-ranking";
-const DEFAULT_WORKSPACE = "C:\\xs2\\DeterminFlow\\data\\workspaces\\xs2-novel-workbench";
+
+const DEFAULT_WORKSPACE = "data/workspaces/market";
 
 type RankingWork = {
   ranking_name: string;
@@ -42,7 +44,8 @@ function parseLikes(value: number | undefined) {
   return value.toLocaleString();
 }
 
-export default function NovelMarketPage() {
+function NovelMarketContent() {
+  const MARKET_WORKFLOW = novelWorkflowId("market-ranking");
   const [workspace, setWorkspace] = useState(() => localStorage.getItem("xs2-novel-workspace") || DEFAULT_WORKSPACE);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [task, setTask] = useState<any>(null);
@@ -149,3 +152,5 @@ export default function NovelMarketPage() {
     </div>
   );
 }
+
+export default function NovelMarketPage() { return <NovelResourceGate><NovelMarketContent /></NovelResourceGate>; }

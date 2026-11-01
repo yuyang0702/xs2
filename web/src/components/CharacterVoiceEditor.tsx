@@ -3,24 +3,12 @@
  *
  * 功能：
  * 1. 显示和编辑 character_voice.md
- * 2. 从参考小说提取角色声音
- * 3. 从 character_profiles.md 生成模板
- * 4. 实时保存编辑内容
+ * 2. 从角色档案标题创建待填写模板
+ * 3. 保存用户编辑，保留已有角色档案
  */
 
 import React, { useState, useEffect } from 'react';
 import { Users, Wand2, FileText, CheckCircle, AlertCircle, Save, RefreshCw } from 'lucide-react';
-
-interface VoiceProfile {
-  character: string;
-  avg_sentence_length: number;
-  question_ratio: number;
-  exclamation_ratio: number;
-  pause_pattern: string;
-  tone_words: string[];
-  syntax_fingerprint: Record<string, number>;
-  sample_count: number;
-}
 
 interface HumanwareStatus {
   voice_file_exists: boolean;
@@ -31,118 +19,81 @@ interface HumanwareStatus {
 
 interface CharacterVoiceEditorProps {
   workspaceId: string;
+  workflowId: string;
   onClose?: () => void;
 }
 
-export default function CharacterVoiceEditor({ workspaceId, onClose }: CharacterVoiceEditorProps) {
-  const [content, setContent] = useState<string>('');
+async function responseJson(response: Response) {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = data.detail;
+    throw new Error(typeof detail === 'string' ? detail : detail?.message || data.message || `请求失败（${response.status}）`);
+  }
+  return data;
+}
+
+export default function CharacterVoiceEditor({ workspaceId, workflowId }: CharacterVoiceEditorProps) {
+  const [content, setContent] = useState('');
   const [status, setStatus] = useState<HumanwareStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace: workspaceId }).toString();
 
-  // 加载当前状态
   useEffect(() => {
-    loadStatus();
-    loadContent();
-  }, [workspaceId]);
-
-  const loadStatus = async () => {
-    try {
-      const response = await fetch(`/api/humanware/status/${workspaceId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setStatus(data);
-      }
-    } catch (error) {
-      console.error('加载状态失败:', error);
-    }
-  };
-
-  const loadContent = async () => {
+    const controller = new AbortController();
     setLoading(true);
-    try {
-      const response = await fetch(`/api/humanware/voice-file/${workspaceId}`);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.status === 'success') {
-          setContent(data.content || '');
-        } else {
-          setContent('');
-        }
+    setStatus(null);
+    setContent('');
+    setMessage(null);
+    Promise.all([
+      fetch(`/api/humanware/status?${query}`, { signal: controller.signal }).then(responseJson),
+      fetch(`/api/humanware/voice-file?${query}`, { signal: controller.signal }).then(responseJson),
+    ]).then(([nextStatus, document]) => {
+      if (!controller.signal.aborted) {
+        setStatus(nextStatus);
+        setContent(document.content || '');
       }
-    } catch (error) {
-      console.error('加载内容失败:', error);
-      showMessage('error', '加载失败，请重试');
-    } finally {
-      setLoading(false);
-    }
-  };
+    }).catch(error => {
+      if (!controller.signal.aborted) setMessage({ type: 'error', text: error.message });
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [query]);
 
   const saveContent = async () => {
     setSaving(true);
+    setMessage(null);
     try {
-      // 直接保存到文件系统
-      const response = await fetch(`/api/novel/${workspaceId}/file`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: 'meta/character_voice.md',
-          content: content
-        })
-      });
-
-      if (response.ok) {
-        showMessage('success', '保存成功');
-        await loadStatus(); // 重新加载状态
-      } else {
-        showMessage('error', '保存失败');
-      }
+      await fetch('/api/humanware/voice-file', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflow_id: workflowId, workspace: workspaceId, content }),
+      }).then(responseJson);
+      setStatus(await fetch(`/api/humanware/status?${query}`).then(responseJson));
+      setMessage({ type: 'success', text: '保存成功' });
     } catch (error) {
-      console.error('保存失败:', error);
-      showMessage('error', '保存失败，请重试');
-    } finally {
-      setSaving(false);
-    }
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : '保存失败，请重试' });
+    } finally { setSaving(false); }
   };
 
   const generateFromProfiles = async () => {
-    if (!status?.profiles_file_exists) {
-      showMessage('error', '请先创建 character_profiles.md');
-      return;
-    }
-
     setGenerating(true);
+    setMessage(null);
     try {
-      const response = await fetch('/api/humanware/generate-voice-file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workspace_id: workspaceId,
-          from_profiles: true
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        showMessage('success', data.message);
-        await loadContent();
-        await loadStatus();
-      } else {
-        showMessage('error', '生成失败');
-      }
+      const result = await fetch('/api/humanware/generate-voice-file', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflow_id: workflowId, workspace: workspaceId }),
+      }).then(responseJson);
+      const [nextStatus, document] = await Promise.all([
+        fetch(`/api/humanware/status?${query}`).then(responseJson),
+        fetch(`/api/humanware/voice-file?${query}`).then(responseJson),
+      ]);
+      setStatus(nextStatus);
+      setContent(document.content || '');
+      setMessage({ type: 'success', text: result.message });
     } catch (error) {
-      console.error('生成失败:', error);
-      showMessage('error', '生成失败，请重试');
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const showMessage = (type: 'success' | 'error' | 'info', text: string) => {
-    setMessage({ type, text });
-    setTimeout(() => setMessage(null), 3000);
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : '生成失败，请重试' });
+    } finally { setGenerating(false); }
   };
 
   const cardClass = 'rounded-2xl border border-border bg-card shadow-sm';
@@ -185,15 +136,15 @@ export default function CharacterVoiceEditor({ workspaceId, onClose }: Character
           <div className="flex gap-2">
             <button
               onClick={generateFromProfiles}
-              disabled={generating || !status?.profiles_file_exists}
+              disabled={saving || generating || !status?.profiles_file_exists || status?.voice_file_exists || !!content.trim()}
               className={secondaryButtonClass}
             >
               <Wand2 className="h-4 w-4" />
-              {generating ? '生成中...' : '从角色档案生成'}
+              {generating ? '创建中...' : '创建待填写模板'}
             </button>
             <button
               onClick={saveContent}
-              disabled={saving}
+              disabled={saving || generating || !status}
               className={primaryButtonClass}
             >
               <Save className="h-4 w-4" />
@@ -256,7 +207,7 @@ export default function CharacterVoiceEditor({ workspaceId, onClose }: Character
         <div className="mt-3 space-y-3 text-muted-foreground">
           <p>
             <strong>1. 首次创建：</strong>
-            点击"从角色档案生成"按钮，系统会为 character_profiles.md 中的每个角色创建声音模板。
+            点击“创建待填写模板”，按角色档案中的二级标题生成空白条目，不调用模型、不推断人物声音，也不覆盖已有文件。AI 声音生成沿用角色创建工作流。
           </p>
           <p>
             <strong>2. 完善内容：</strong>
@@ -264,7 +215,7 @@ export default function CharacterVoiceEditor({ workspaceId, onClose }: Character
           </p>
           <p>
             <strong>3. 自动生效：</strong>
-            保存后，所有写作agent（对话、内心、动作）会自动遵守角色声音定义，确保内容有人味。
+            保存后，后续写作任务会读取角色声音文件作为创作约束。请通过模拟读者报告检查正文是否落实这些约定。
           </p>
           <p>
             <strong>4. 持续迭代：</strong>

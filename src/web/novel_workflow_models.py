@@ -1,4 +1,4 @@
-"""Model choices for novel steps, persisted in their real Workflow definitions."""
+"""Model choices for novel steps, persisted separately from Plugin definitions."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -10,11 +10,11 @@ from fastapi import HTTPException
 from src.agent.definition import get_agent_definition
 from src.workflow.task_overrides import apply_node_model_overrides, TaskOverrideValidationError
 
-PREFIX = "xs2-novel-flywheel-"
+NOVEL_PLUGIN_OWNER = "xs2-novel-flywheel"
 
 
 def novel_definition(manager, workflow_id: str) -> dict:
-    if not workflow_id.startswith(PREFIX):
+    if manager.get_workflow_owner(workflow_id) != NOVEL_PLUGIN_OWNER:
         raise HTTPException(400, "这里只能调整小说工作台的步骤模型。")
     workflow = manager.get_workflow(workflow_id)
     if not workflow:
@@ -82,7 +82,7 @@ def save_model_settings(manager, workflow_id: str, expected_digest: str,
         if not model:
             nodes[node_id]["model_override"] = ""
     if updated != current:
-        if manager.update_workflow(workflow_id, updated) is None:
+        if manager.save_workflow_model_overrides(workflow_id, choices, expected_definition=current) is None:
             raise HTTPException(409, "模型设置没有保存成功，请刷新后重试。")
     # Read from disk through the manager, just as future create_task does.
     saved = novel_definition(manager, workflow_id)

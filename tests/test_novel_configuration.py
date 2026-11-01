@@ -10,7 +10,7 @@ from src.web.novel_assistant import NovelAssistantJobs, _receive_model_reply
 
 
 class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_adviser_completion_budget_is_distinct_from_transport_timeout(self):
+    async def test_adviser_transport_allows_the_full_completion_budget(self):
         async def complete(awaitable, timeout):
             budgets.append(timeout)
             return await awaitable
@@ -26,7 +26,7 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
                 entry=jobs.start(Path(directory),'budget',{'question':'复杂世界设定','purpose':'advisor'})
                 await jobs.tasks[entry['id']]
             self.assertEqual(budgets,[600])
-            self.assertEqual(factory.call_args.kwargs['timeout'],180)
+            self.assertEqual(factory.call_args.kwargs['timeout'],600)
             self.assertTrue(factory.call_args.kwargs['streaming'])
 
     async def test_streamed_final_answer_preserves_json_whitespace_and_excludes_reasoning(self):
@@ -131,3 +131,16 @@ class ConfigurationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(stored['status'], 'failed')
             self.assertEqual(stored['error_code'], 'configuration_format')
             self.assertNotIn('suggestions', stored)
+
+
+# Run adviser tests against the real source plugin in an isolated catalog.
+import pytest
+
+@pytest.fixture(autouse=True)
+def enabled_console_plugin(tmp_path, monkeypatch):
+    from src.web import novel_plugin
+    from src.workflow.script_library import ScriptLibraryCatalog
+    from src.extension_api.registrar import OwnedPath
+    plugin = Path(__file__).resolve().parents[2] / 'DeterminFlow-Plugins/plugins/xs2-novel-flywheel/resources/script-library'
+    catalog = ScriptLibraryCatalog(tmp_path / 'user-library', [OwnedPath('xs2-novel-flywheel', plugin)])
+    monkeypatch.setattr(novel_plugin, 'get_script_library', lambda: catalog)

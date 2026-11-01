@@ -40,20 +40,21 @@ export default function NovelAdvisorConversation({
   const last = entries[entries.length - 1];
   const disabled = busy || loading || workflowBusy;
   const hasLibrary = (librarySize || 0) > 0;
-  const hasAdopted = (adoptedCount || 0) > 0;
+  // 在小说顾问阶段，即使已有写法也应该显示按钮（可以继续优化）
+  const hasAdopted = false; // 临时修改：始终允许快速采用
   const hasMechanismRecommendations = !!(latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length);
   const quick = (value: string) => { onQuestion(value); setFollowup(false); input.current?.focus(); };
 
-  // 调试日志
-  console.log('[NovelAdvisorConversation] 按钮显示条件:', {
-    hasMechanismRecommendations,
-    hasOnQuickAdopt: !!onQuickAdopt,
-    hasOnManualSelect: !!onManualSelect,
-    hasAdopted,
-    adoptedCount,
-    showButton: hasMechanismRecommendations && !!onQuickAdopt && !hasAdopted,
-    mechanismCount: latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length || 0
-  });
+  // 调试日志 - 详细输出按钮显示条件
+  console.log('=== [NovelAdvisorConversation] 按钮显示条件诊断 ===');
+  console.log('1. hasMechanismRecommendations:', hasMechanismRecommendations,
+    '(mechanism数量:', latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length || 0, ')');
+  console.log('2. onQuickAdopt存在:', !!onQuickAdopt);
+  console.log('3. hasAdopted:', hasAdopted, '(adoptedCount:', adoptedCount, ')');
+  console.log('4. 按钮应该显示:', hasMechanismRecommendations && !!onQuickAdopt && !hasAdopted);
+  console.log('5. latest entry ID:', latest?.id);
+  console.log('6. mechanism_recommendations 完整数据:', latest?.advisor_sections?.mechanism_recommendations);
+  console.log('============================================');
 
   const handleQuickAdopt = async (skipCompatibility: boolean) => {
     console.log('[handleQuickAdopt] 开始快速采用，参数:', { skipCompatibility, hasLatest: !!latest, hasOnQuickAdopt: !!onQuickAdopt });
@@ -158,11 +159,13 @@ export default function NovelAdvisorConversation({
       ] as const).map(([key, title]) => <article key={key} className={`rounded-xl border p-5 ${key === 'risks' ? 'border-amber-300/25 bg-amber-300/5' : 'border-border bg-background/40'}`}><h4 className="mb-3 font-medium">{title}</h4><NovelArchiveContent content={advisorMarkdown(latest.advisor_sections?.[key] || '本次暂未提供，请继续讨论。')} /></article>)}</div>
       <details className="rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">{receipts?.[latest.id] ? '查看本次填写记录' : '查看建议参数（尚未采用）'}</summary><NovelConfigurationSuggestions entry={{ ...latest, purpose: 'configure' }} receipt={receipts?.[latest.id]} pendingApproval={!receipts?.[latest.id]} /></details>
       {latest.advisor_sections?.mechanism_recommendations && <details className="rounded-xl border border-blue-300/25 bg-blue-300/5 p-4"><summary className="cursor-pointer text-sm font-medium">📝 推荐的写法机制</summary><div className="mt-4 space-y-4 text-xs"><div>{(latest.advisor_sections.mechanism_recommendations.adopted_from_library?.length ?? 0) > 0 && <div><p className="mb-2 font-medium text-blue-700">从参考作品采用：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.mechanism_recommendations.adopted_from_library!.map((m, i) => <li key={i}>【{m.priority}】<strong>{m.mechanism}</strong> - {m.usage_in_story}（在{m.chapter_placement || '创作中'}使用）</li>)}</ul></div>}{(latest.advisor_sections.mechanism_recommendations.new_mechanisms?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-blue-700">补充的新机制：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.mechanism_recommendations.new_mechanisms!.map((m, i) => <li key={i}>【{m.priority}】<strong>{m.mechanism}</strong> - {m.reason}{m.synergy_with?.length > 0 && `（与${m.synergy_with.join('、')}协同）`}</li>)}</ul></div>}{(latest.advisor_sections.mechanism_recommendations.avoid_combinations?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-amber-600">⚠️ 避免的组合：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.mechanism_recommendations.avoid_combinations!.map((c, i) => <li key={i}><strong>{c.a}</strong> + <strong>{c.b}</strong>：{c.reason}</li>)}</ul></div>}</div></div></details>}
+      {latest.advisor_sections?.style_recommendations && <details className="rounded-xl border border-purple-300/25 bg-purple-300/5 p-4"><summary className="cursor-pointer text-sm font-medium">🎨 推荐的文风选择</summary><div className="mt-4 space-y-4 text-xs">{(latest.advisor_sections.style_recommendations.adopted_styles?.length ?? 0) > 0 && <div><p className="mb-2 font-medium text-purple-700">推荐采用的风格：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.style_recommendations.adopted_styles!.map((s, i) => <li key={i}>【{s.priority}】<strong>{s.style}</strong> - {s.reason}（{s.usage_in_story}）</li>)}</ul></div>}{(latest.advisor_sections.style_recommendations.avoid_styles?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-amber-600">⚠️ 避免的风格：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.style_recommendations.avoid_styles!.map((s, i) => <li key={i}><strong>{s.style}</strong>：{s.reason}</li>)}</ul></div>}</div></details>}
+      {latest.advisor_sections?.conflict_recommendations && <details className="rounded-xl border border-orange-300/25 bg-orange-300/5 p-4"><summary className="cursor-pointer text-sm font-medium">⚔️ 推荐的冲突模式</summary><div className="mt-4 space-y-4 text-xs">{(latest.advisor_sections.conflict_recommendations.adopted_conflicts?.length ?? 0) > 0 && <div><p className="mb-2 font-medium text-orange-700">推荐采用的冲突：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.conflict_recommendations.adopted_conflicts!.map((c, i) => <li key={i}>【{c.priority}】<strong>{c.conflict}</strong> - {c.reason}（{c.usage_in_story}）</li>)}</ul></div>}{(latest.advisor_sections.conflict_recommendations.avoid_conflicts?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-amber-600">⚠️ 避免的冲突：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.conflict_recommendations.avoid_conflicts!.map((c, i) => <li key={i}><strong>{c.conflict}</strong>：{c.reason}</li>)}</ul></div>}</div></details>}
 
       {showQuickAdoptDialog && hasMechanismRecommendations && onQuickAdopt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowQuickAdoptDialog(false)}>
           <div className="mx-4 max-w-lg rounded-2xl border border-border bg-background p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold">快速采用推荐写法</h3>
+            <h3 className="text-lg font-semibold">快速采用 AI 推荐</h3>
             <p className="mt-3 text-sm leading-7 text-muted-foreground">
               将自动完成以下操作：
             </p>
@@ -175,9 +178,21 @@ export default function NovelAdvisorConversation({
                 <span className="text-primary">✓</span>
                 <span>自动采用 AI 推荐的 {latest.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length || 0} 条写法机制</span>
               </li>
+              {(latest.advisor_sections?.style_recommendations?.adopted_styles?.length || 0) > 0 && (
+                <li className="flex items-start gap-2">
+                  <span className="text-primary">✓</span>
+                  <span>自动采用 AI 推荐的 {latest.advisor_sections?.style_recommendations?.adopted_styles?.length || 0} 条文风选择</span>
+                </li>
+              )}
+              {(latest.advisor_sections?.conflict_recommendations?.adopted_conflicts?.length || 0) > 0 && (
+                <li className="flex items-start gap-2">
+                  <span className="text-primary">✓</span>
+                  <span>自动采用 AI 推荐的 {latest.advisor_sections?.conflict_recommendations?.adopted_conflicts?.length || 0} 条冲突模式</span>
+                </li>
+              )}
               <li className="flex items-start gap-2">
                 <span className="text-primary">✓</span>
-                <span>保存到已采用写法（可在"本书参考写法"中查看和调整）</span>
+                <span>保存到已采用列表（可在"本书参考写法"中查看和调整）</span>
               </li>
             </ul>
             <div className="mt-5 flex flex-wrap justify-end gap-3">
@@ -211,7 +226,7 @@ export default function NovelAdvisorConversation({
       <div className="flex flex-wrap gap-3">
         <button disabled={disabled} onClick={() => { setFollowup(true); onQuestion(''); input.current?.focus(); }} className="flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-sm disabled:opacity-50"><MessageCircle className="h-4 w-4" />继续讨论这个方向</button>
 
-        {hasMechanismRecommendations && onQuickAdopt && !hasAdopted && (
+        {hasMechanismRecommendations && onQuickAdopt && (
           <button
             disabled={disabled || quickAdopting}
             onClick={() => {
@@ -221,7 +236,7 @@ export default function NovelAdvisorConversation({
             className="flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50"
           >
             {quickAdopting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {quickAdopting ? '正在采用写法...' : '快速采用推荐写法'}
+            {quickAdopting ? '正在采用推荐...' : ((adoptedCount || 0) > 0 ? '更新为 AI 推荐' : '快速采用 AI 推荐')}
           </button>
         )}
 

@@ -506,6 +506,14 @@ export type NovelAssistantEntry = {
       new_mechanisms?: Array<{mechanism: string; reason: string; synergy_with: string[]; priority: string}>;
       avoid_combinations?: Array<{a: string; b: string; reason: string}>;
     };
+    style_recommendations?: {
+      adopted_styles?: Array<{style: string; reason: string; usage_in_story: string; priority: string}>;
+      avoid_styles?: Array<{style: string; reason: string}>;
+    };
+    conflict_recommendations?: {
+      adopted_conflicts?: Array<{conflict: string; reason: string; usage_in_story: string; priority: string}>;
+      avoid_conflicts?: Array<{conflict: string; reason: string}>;
+    };
   };
   suggestions?: { key: string; label: string; value: string; reason: string }[];
   configuration_base?: { mode: string; values: Record<string, string>; has_story_facts?: boolean; advisor_brief?: string };

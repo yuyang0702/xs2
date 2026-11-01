@@ -33,6 +33,7 @@ from .novel_progress import progress
 from .novel_repair import repair_context, prepare_repair, ensure_idle, preserve_legacy_report
 from .novel_chapters import chapter_context, chapter_removal_preview, remove_chapter
 from .novel_story_support import story_support
+from .novel_plugin import workflow_resources, console_service
 from .novel_workflow_models import novel_definition, model_settings, save_model_settings
 
 router = APIRouter(prefix="/api/novel-console", tags=["novel-console"])
@@ -41,6 +42,22 @@ _index = DATA_DIR / "novel-console" / "workspaces.json"
 _manifest = ".novel-project.json"
 _library_root = DATA_DIR / "writing-library"
 _FANQIE_HOSTS = {"fanqienovel.com", "www.fanqienovel.com"}
+
+
+def require_manual_control(request: Request, root: Path):
+    automation = getattr(request.app.state, "novel_automation", None)
+    if automation and automation.has_active(root):
+        raise HTTPException(409, "后台自动创作正在推进，请先暂停后修改作品资料")
+
+
+@router.get("/resources")
+def novel_resources(request: Request):
+    try:
+        resources = workflow_resources(request.app.state.extension_manager, _get_manager(request))
+        console_service()
+        return {"owner": "xs2-novel-flywheel", "workflows": resources}
+    except ValueError as error:
+        raise HTTPException(503, str(error)) from error
 
 
 class NovelModelSave(BaseModel):
@@ -440,6 +457,7 @@ async def import_url(payload: UrlImport, request: Request):
     if payload.source_mode not in {"auto", "short_full", "serial_chapters"}:
         raise HTTPException(400, "参考语料类型无效")
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
+    require_manual_control(request, root)
     source_url = _validate_fanqie_url(payload.url)
     selected = payload.chapters[:200]
     pages: list[dict[str, object]] = []
@@ -500,7 +518,7 @@ async def get_mechanism_recommendations(request: Request, workspace: str = "", a
     if workspace:
         try:
             manager = _get_manager(request)
-            root = manager._ws_manager.resolve_workflow_workspace("xs2-novel-flywheel", override=workspace).resolve()
+            root = manager._ws_manager.resolve_workflow_workspace(workflow_resources(request.app.state.extension_manager, manager)["build"], override=workspace).resolve()
             active_context = root / "learning/active_context.md"
             if active_context.is_file():
                 content = active_context.read_text(encoding="utf-8")
@@ -544,7 +562,7 @@ async def get_writing_library_item(library_id: str, request: Request, workspace:
     if workspace:
         try:
             manager = _get_manager(request)
-            root = manager._ws_manager.resolve_workflow_workspace("xs2-novel-flywheel", override=workspace).resolve()
+            root = manager._ws_manager.resolve_workflow_workspace(workflow_resources(request.app.state.extension_manager, manager)["build"], override=workspace).resolve()
 
             # 读取本书的 active_context.md
             active_context_path = root / "learning/active_context.md"
@@ -841,6 +859,7 @@ async def attach_writing_library(payload: LibraryAttach, request: Request):
     _ensure_http_mutation_allowed(request, payload.workflow_id)
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
+    require_manual_control(request, root)
     folder = library_path(payload.library_id)
     candidates_path = folder / "candidates.json"
     if not candidates_path.is_file():
@@ -910,23 +929,46 @@ def _assistant_jobs(request: Request) -> NovelAssistantJobs:
     return jobs
 
 
+def _available_assistant_workflow(request: Request, manager) -> str:
+    """Check the active plugin before resolving a workspace or starting work."""
+    extension_manager = getattr(request.app.state, 'extension_manager', None)
+    if extension_manager is None:
+        raise HTTPException(503, '小说插件尚未加载，请检查插件状态并重新启动。')
+    try:
+        resources = workflow_resources(extension_manager, manager)
+        advisor = resources.get('novel-advisor')
+        if not advisor:
+            raise ValueError('小说插件缺少可用的小说顾问工作流，请更新或重新启用插件。')
+        service = console_service()
+        if not callable(getattr(service, 'create_assistant', None)):
+            raise ValueError('小说插件缺少顾问服务能力，请更新插件并重新启动。')
+        return advisor
+    except ValueError as error:
+        raise HTTPException(503, str(error)) from error
+
+
 @router.get("/assistant/history")
 async def novel_assistant_history(workflow_id: str, workspace: str, request: Request):
-    mgr = request.app.state.workflow_manager
+    mgr = _get_manager(request)
+    _available_assistant_workflow(request, mgr)
     root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
-    return {"entries": _assistant_jobs(request).history(root)}
+    try:
+        return {"entries": _assistant_jobs(request).history(root)}
+    except ValueError as error:
+        raise HTTPException(503, str(error)) from error
 
 
 @router.post("/assistant")
 async def novel_assistant(payload: NovelAssistantRequest, request: Request):
     """Submit a durable analysis without tying model execution to a browser tab."""
     _ensure_http_mutation_allowed(request, payload.workflow_id)
+    advisor_workflow = _available_assistant_workflow(request, _get_manager(request))
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
     data = payload.model_dump(mode="json")
     if payload.purpose == 'advisor':
         from src.core.model_manager import get_model_manager
-        settings = model_settings(novel_definition(mgr, "xs2-novel-flywheel-novel-advisor"), get_model_manager())
+        settings = model_settings(novel_definition(mgr, advisor_workflow), get_model_manager())
         nodes = settings['nodes']
         if len(nodes) != 1 or not nodes[0]['available']:
             raise HTTPException(409, "小说顾问尚未配置可用模型，请在当前步骤的模型设置中选择。")
@@ -936,7 +978,10 @@ async def novel_assistant(payload: NovelAssistantRequest, request: Request):
             data['_repair_context'] = repair_context(root, payload.chapter, DATA_DIR / 'workflows')
         except (ValueError, json.JSONDecodeError) as error:
             raise HTTPException(409, str(error)) from error
-    entry = _assistant_jobs(request).start(root, str(payload.request_id), data)
+    try:
+        entry = _assistant_jobs(request).start(root, str(payload.request_id), data)
+    except ValueError as error:
+        raise HTTPException(503, str(error)) from error
     return {"success": True, "entry": entry}
 
 
@@ -952,6 +997,7 @@ async def apply_plot_proposal(payload: PlotApply, request: Request):
     _ensure_http_mutation_allowed(request, payload.workflow_id)
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
+    require_manual_control(request, root)
     with _lock:
         jobs = _assistant_jobs(request)
         entries = jobs.history(root)
@@ -1057,6 +1103,7 @@ async def remove_novel_chapter(payload: ChapterRemoval, request: Request):
     _ensure_http_mutation_allowed(request, payload.workflow_id)
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
+    require_manual_control(request, root)
     with _lock:
         try:
             return remove_chapter(root, DATA_DIR / 'workflows', payload.chapter, payload.operation,
@@ -1089,6 +1136,7 @@ async def apply_repair_plan(payload: RepairApply, request: Request):
     _ensure_http_mutation_allowed(request, payload.workflow_id)
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
+    require_manual_control(request, root)
     jobs = _assistant_jobs(request)
     with _lock:
         entries = jobs.history(root)
@@ -1118,6 +1166,11 @@ async def save_project(payload: ProjectSave, request: Request):
         manifest = safe_target(root, _manifest)
         incoming = dict(payload.state)
         existing = read_json_file(manifest, {})
+        automation = getattr(request.app.state, "novel_automation", None)
+        if automation and automation.has_active(root):
+            raise HTTPException(409, "后台自动创作正在推进，请先暂停自动创作再修改作品设置")
+        # Only the explicit automation endpoint may arm a background run.
+        incoming["autoArmed"] = False
         # Reject stale browser snapshots rather than silently replacing newer
         # workflow progress, settings or intentional writing-library changes.
         revision = existing.get("_revision", 0) if isinstance(existing, dict) else 0
@@ -1137,6 +1190,7 @@ async def delete_project(workflow_id: str, workspace: str, request: Request):
     _ensure_http_mutation_allowed(request, workflow_id)
     mgr = _ensure_workflow_writable(request, workflow_id)
     root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
+    require_manual_control(request, root)
     books_root = (WORKFLOW_WORKSPACES_DIR / "books").resolve()
     workflow_root = WORKFLOW_WORKSPACES_DIR.resolve()
     if not root.is_relative_to(workflow_root) or root == workflow_root or root == books_root:
@@ -1187,6 +1241,7 @@ async def write_text(payload: TextWrite, request: Request):
     _ensure_http_mutation_allowed(request, payload.workflow_id)
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
+    require_manual_control(request, root)
     target = safe_target(root, payload.path)
     # Only author-provided references and confirmed console plans are writable here.
     if not payload.path.replace("\\", "/").startswith(("references/", "meta/console-")):

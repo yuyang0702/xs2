@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from .novel_library import read_json
 from .novel_repair import ensure_idle
+from .novel_plugin import task_files
 
 PRODUCTION = ("mvp", "polish", "reader-sim", "post-hoc", "export")
 
@@ -29,8 +30,9 @@ def chapter_tasks(root, workflows_dir, chapter):
     reset_at = max((timestamp(value) for value in reset_dates if value), default=None)
     for stage in PRODUCTION:
         tasks = []
-        for path in (workflows_dir / f"xs2-novel-flywheel-{stage}/tasks").glob("*.json"):
+        for path in task_files(workflows_dir, stage):
             task = read_json(path, {})
+            task.setdefault("workflow_id", path.parent.parent.name)
             workspace = task.get("workspace_override")
             if not workspace or Path(workspace).resolve() != root.resolve():
                 continue
@@ -62,7 +64,7 @@ def chapter_context(root, workflows_dir, chapter, action="write"):
     if action != "write" and not has_body:
         raise ValueError("本章还没有正文，请先完成正文生成。")
     tasks = chapter_tasks(root, workflows_dir, chapter)
-    refs = {stage: {"workflow_id": f"xs2-novel-flywheel-{stage}", "task_id": task["task_id"]}
+    refs = {stage: {"workflow_id": task["workflow_id"], "task_id": task["task_id"]}
             for stage, task in tasks.items()}
     completed = [stage for stage, task in tasks.items() if task.get("status") == "completed"]
     if has_body and "mvp" not in completed:

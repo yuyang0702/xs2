@@ -1075,6 +1075,7 @@ class ExtensionManager(ExtensionExecutorPlaneMixin):
             self.resource_paths("workflows"),
             target_root,
             active_owners=set(self._load_order),
+            resource_resolver=self.resource_resolver,
         )
 
     @staticmethod

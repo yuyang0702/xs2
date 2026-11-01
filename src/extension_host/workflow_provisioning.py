@@ -10,6 +10,8 @@ import shutil
 from pathlib import Path
 
 from src.extension_api.registrar import OwnedPath
+from src.extension_host.workflow_upgrade import BASE_FILE, migrate_model_edits
+from src.workflow.model_preferences import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,7 @@ def _sync_owned_file(
     source: Path,
     target: Path,
     previous: dict,
+    legacy_base: Path | None = None,
 ) -> dict[str, str]:
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     current_hash = (
@@ -80,16 +83,23 @@ def _sync_owned_file(
             and current_hash == previous_installed_hash
         )
     )
+    if not should_install and target.name == "definition.json":
+        should_install = migrate_model_edits(target, source, previous_installed_hash, legacy_base)
     if should_install:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         installed_hash = source_hash
+        if target.name == "definition.json":
+            atomic_write(target.parent / BASE_FILE, source.read_bytes())
     else:
         installed_hash = previous_installed_hash
-    return {
+    result = {
         "source_hash": source_hash,
         "installed_hash": installed_hash,
     }
+    if not should_install:
+        result["conflict"] = "user_modified"
+    return result
 
 
 def provision_plugin_workflows(
@@ -97,6 +107,8 @@ def provision_plugin_workflows(
     target_root: Path,
     *,
     active_owners: set[str],
+    legacy_bases: dict[str, Path] | None = None,
+    resource_resolver=None,
 ) -> list[str]:
     """Synchronize active definitions and deactivate workflows removed upstream."""
     target_root.mkdir(parents=True, exist_ok=True)
@@ -151,13 +163,20 @@ def provision_plugin_workflows(
                 )
 
             installed_files = {}
+            conflicts = []
             for source_file in source_files:
                 relative_path = source_file.relative_to(source_dir).as_posix()
                 installed_files[relative_path] = _sync_owned_file(
                     source_file,
                     target_dir / relative_path,
                     previous_files.get(relative_path, {}),
+                    (legacy_bases or {}).get(source_dir.name) if relative_path == "definition.json" else None,
                 )
+                if installed_files[relative_path].get("conflict"):
+                    warning = f"扩展 Workflow {source_dir.name} 文件 {relative_path} 检测到用户修改，已保留；升级冲突需要处理"
+                    warnings.append(warning)
+                    logger.warning(warning)
+                    conflicts.append(relative_path)
 
             orphaned_files: dict[str, dict[str, str]] = {}
             current_paths = set(installed_files)
@@ -217,8 +236,16 @@ def provision_plugin_workflows(
                 "active": True,
                 "files": installed_files,
             }
+            if resource_resolver is not None:
+                mapping = resource_resolver.mapping_for("workflow", source_dir.name)
+                if mapping is not None and mapping.plugin_id == owned_root.owner:
+                    marker_data["local_id"] = mapping.local_id
+            elif marker.get("local_id"):
+                marker_data["local_id"] = marker["local_id"]
             if orphaned_files:
                 marker_data["orphaned_files"] = orphaned_files
+            if conflicts:
+                marker_data["conflicts"] = conflicts
             _write_marker(marker_path, marker_data)
 
     for target_dir in sorted(target_root.iterdir()):

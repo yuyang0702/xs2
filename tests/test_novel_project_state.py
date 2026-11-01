@@ -26,7 +26,8 @@ class NovelProjectStateTests(unittest.TestCase):
                  patch.object(novel_routes, "_index", root / "index.json"):
                 def save(state):
                     payload = novel_routes.ProjectSave(workflow_id="test", workspace=str(root), state=state)
-                    return asyncio.run(novel_routes.save_project(payload, None))
+                    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+                    return asyncio.run(novel_routes.save_project(payload, request))
 
                 result = save({"title": "新名称", "completed": ["character", "story-plan"], "refs": {"character": {"task_id": "new"}}})
                 self.assertEqual(result["revision"], 1)

@@ -1,3 +1,4 @@
+import {novelWorkflowId} from "../lib/novel-resources";
 import { useRef, useState } from "react";
 import { Download } from "lucide-react";
 
@@ -10,7 +11,7 @@ export default function NovelManuscriptDownload({ title, workspace, previous = f
     guard.current = true; setBusy(true); setFeedback("正在准备下载…");
     try {
       const filename = `${title.replace(/[<>:"/\\|?*]/g, "_") || "小说成品"}.md`;
-      const query = new URLSearchParams({ workflow_id: "xs2-novel-flywheel-export", workspace, filename });
+      const query = new URLSearchParams({ workflow_id: novelWorkflowId("export"), workspace, filename });
       const url = `/api/novel-console/export/download?${query}`;
       const response = await fetch(url, { method: "HEAD" });
       if (!response.ok) throw new Error(response.status === 404 ? "尚未生成成品，请先完成导出。" : `下载失败（${response.status}），请重试。`);

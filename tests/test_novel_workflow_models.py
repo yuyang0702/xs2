@@ -46,11 +46,24 @@ class _Manager:
         return {"definition": self.definition} if workflow_id == self.definition["workflow_id"] else None
 
     def update_workflow(self, workflow_id, definition):
-        self.definition = definition
-        return {"definition": definition}
+        raise AssertionError("model settings must not rewrite the workflow")
+
+    def get_workflow_owner(self, workflow_id):
+        return "xs2-novel-flywheel"
+
+    def save_workflow_model_overrides(self, workflow_id, choices, *, expected_definition=None):
+        from src.workflow.model_preferences import apply_model_preferences
+        self.definition = apply_model_preferences(self.definition, choices)
+        return {"definition": self.definition}
 
 
 class NovelWorkflowModelTests(unittest.TestCase):
+    def test_custom_installed_prefix_uses_owner_identity(self):
+        manager = _Manager()
+        manager.definition["workflow_id"] = "custom-novel-test"
+        saved = save_model_settings(manager, "custom-novel-test", definition_digest(manager.definition), {"writer": "p:second"}, _Models())
+        self.assertEqual(saved["nodes"][0]["effective_model"], "p:second")
+
     def test_save_changes_only_node_model_and_keeps_definition(self):
         manager = _Manager()
         models = _Models()

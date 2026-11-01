@@ -1,3 +1,6 @@
+import NovelResourceGate from "../components/NovelResourceGate";
+import {automationState, readAutomation, controlAutomation} from "../lib/novel-automation";
+import {novelWorkflowId as workflowId, novelStageId} from "../lib/novel-resources";
 import NovelAdvisorConversation from "../components/NovelAdvisorConversation";
 import { adoptNovelAdvisor, advisorMarkdown } from "../lib/novel-advisor";
 import NovelConfigurationSuggestions from "../components/NovelConfigurationSuggestions";
@@ -45,7 +48,6 @@ import { readerRepairDecision, shouldAdvanceSerialChapter } from "../lib/novel-a
 import { archiveLabel, archiveScalar } from "../lib/novel-archive";
 import CharacterVoiceEditor from "../components/CharacterVoiceEditor";
 
-const PREFIX = "xs2-novel-flywheel-";
 const DEFAULT_WORKSPACE = "data/workspaces/books/welcome";
 
 type StageMeta = {
@@ -101,6 +103,8 @@ type Project = {
   assessmentOnly?: boolean;
   repairModel?: string;
   autoRepairPlanId?: string;
+  autoController?: string;
+  autoArmed?: boolean;
   pendingReferenceAdoption?: string;
   continuationIssue?: Awaited<ReturnType<typeof checkNovelContinuation>> | null;
   _revision?: number;
@@ -119,7 +123,6 @@ const LAYER_LABELS: Record<string, string> = { language: "语言", structure: "�
 const SCOPE_LABELS: Record<string, string> = { short_full: "短篇全文", serial_opening: "长篇开局", serial_chapter: "长篇章节", serial_arc: "长篇卷级", general: "通用" };
 
 const storageKey = (workspace: string) => `xs2-novel-control-v2:${workspace.toLowerCase()}`;
-const workflowId = (stageId: string) => PREFIX + stageId;
 const terminal = ["completed", "failed", "stopped", "cancelled", "interrupted"];
 const cardClass = "rounded-2xl border border-border bg-card";
 const inputClass = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-60";
@@ -153,7 +156,7 @@ function restore(workspace: string): Project {
       title: saved.title || "未命名作品", mode: saved.mode === "serial" ? "serial" : "short", index: Number.isInteger(saved.index) ? saved.index : 0,
       _revision: saved._revision, assessmentOnly: saved.assessmentOnly === true, repairReviewOnly: saved.repairReviewOnly === true, repairModel: saved.repairModel || "", autoRepairPlanId: saved.autoRepairPlanId || "", stageId: saved.stageId, values: { ...FALLBACK_DEFAULTS, ...(saved.values || {}) }, refs: saved.refs || {}, completed: saved.completed || [], selected: saved.selected || [],
       readerRepairCount: Number(saved.readerRepairCount) || 0, autoRepairLimit: Math.max(1, Math.min(5, Number(saved.autoRepairLimit) || 2)), autoPauseReason: saved.autoPauseReason || "", autoLaunchStage: saved.autoLaunchStage || "",
-      autoNext: saved.autoNext === true, autoScope: saved.autoScope || "manual", autoChapterLimit: Number(saved.autoChapterLimit) || 1,
+      autoNext: saved.autoController === "server-v1" && saved.autoNext === true, autoController: saved.autoController, autoArmed: saved.autoController === "server-v1" && saved.autoArmed === true, autoScope: saved.autoScope || "manual", autoChapterLimit: Number(saved.autoChapterLimit) || 1,
       autoChapterStarted: typeof saved.autoChapterStarted === "number" ? saved.autoChapterStarted : null, directionConfirmed: saved.directionConfirmed === true,
       distillationSkipped: saved.distillationSkipped === true, advisorAccepted: saved.advisorAccepted === true, assistantPlan: saved.assistantPlan || "", writingMode: saved.writingMode || "original", libraryRefs: saved.libraryRefs || [], persisted: saved.persisted !== false,
     };
@@ -167,7 +170,7 @@ function restore(workspace: string): Project {
 
 function mergeProjectState(workspace: string, saved: Partial<Project>): Project {
   const defaults = restore(workspace);
-  return { ...defaults, ...saved, values: { ...FALLBACK_DEFAULTS, ...saved.values }, persisted: true };
+  return automationState({ ...defaults, ...saved, values: { ...FALLBACK_DEFAULTS, ...saved.values }, persisted: true });
 }
 
 function sameWorkspace(first: string, second: string): boolean {
@@ -240,6 +243,7 @@ function NovelWorkbenchContent() {
   const [chapterOpening, setChapterOpening] = useState(false);
   const chapterOpeningGuard = useRef(false);
   const [project, setProject] = useState<Project>(() => restore(workspace));
+  const [pendingQuickAdoptJump, setPendingQuickAdoptJump] = useState(false);  // 快速采用后待跳转标记
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [workspaceDraft, setWorkspaceDraft] = useState(workspace);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
@@ -249,6 +253,23 @@ function NovelWorkbenchContent() {
   const [pageFeedback, setPageFeedback] = useState("");
   const [loadedWorkspace, setLoadedWorkspace] = useState("");
   const lastSavedProject = useRef("");
+  const applyServerProject = useCallback((saved: Project) => {
+    const next = mergeProjectState(workspace, saved);
+    lastSavedProject.current = JSON.stringify(next);
+    setProject(next);
+  }, [workspace]);
+  useEffect(() => {
+    if (loadedWorkspace !== workspace || project.autoController !== 'server-v1' || !project.autoArmed) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const {state} = await readAutomation<Project>(workflowId('build'), workspace);
+        if (active && state._revision !== undefined && state._revision !== project._revision) applyServerProject(state);
+      } catch (failure) { if (active) setCatalogError(failure instanceof Error ? failure.message : '读取后台进度失败'); }
+    };
+    const timer = window.setInterval(() => void poll(), 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [workspace, loadedWorkspace, project.autoController, project.autoArmed, project._revision, applyServerProject]);
   const [projectList, setProjectList] = useState<Array<{workspace: string; state: Partial<Project>; progress?: NovelProgress}>>([]);
   const refreshProjects = useCallback(async () => {
     try { setProjectList((await listNovelProjects()).projects); } catch (failure) { setCatalogError(failure instanceof Error ? failure.message : "无法读取作品列表"); }
@@ -271,10 +292,15 @@ function NovelWorkbenchContent() {
   useEffect(() => {
     if (!project.persisted || loadedWorkspace !== workspace) return;
     if (JSON.stringify(project) === lastSavedProject.current) return;
+    const saved = JSON.parse(lastSavedProject.current || '{}') as Partial<Project>;
+    if (saved.autoController === 'server-v1' && saved.autoNext && saved.autoArmed) return;
     const timer = window.setTimeout(async () => {
       try {
-        const result = await saveNovelProject(workflowId("build"), workspace, project);
+        const result = project.autoController === 'server-v1' && project.autoNext && project.autoArmed
+          ? await controlAutomation('start', workflowId('build'), workspace, project)
+          : await saveNovelProject(workflowId("build"), workspace, project);
         if (activeWorkspace.current !== workspace) return;
+        if ('state' in result) { applyServerProject(result.state); return; }
         lastSavedProject.current = JSON.stringify({ ...project, _revision: result.revision });
         setProject(current => ({ ...current, _revision: result.revision }));
         const canonical = result.workspace;
@@ -295,11 +321,11 @@ function NovelWorkbenchContent() {
       }
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [workspace, project, refreshProjects, loadedWorkspace]);
+  }, [workspace, project, refreshProjects, loadedWorkspace, applyServerProject]);
   const refreshCatalog = useCallback(async () => {
     try {
       const items = await listWorkflows();
-      const relevant = items.filter((item) => item.workflow_id.startsWith(PREFIX));
+      const relevant = items.filter((item) => !!novelStageId(item.workflow_id));
       const enriched = await Promise.all(relevant.map(async (item) => {
         try { return { ...item, definition: (await getWorkflow(item.workflow_id)).definition }; } catch { return item; }
       }));
@@ -316,6 +342,43 @@ function NovelWorkbenchContent() {
   useEffect(() => { void refreshFiles().catch(() => {}); }, [refreshFiles]);
   useEffect(() => { if (view !== "home" || loadedWorkspace !== workspace) return; const refresh = () => { void refreshProjects(); void refreshFiles().catch(() => {}); }; refresh(); const timer = window.setInterval(refresh, 5000); return () => window.clearInterval(timer); }, [view, loadedWorkspace, workspace, refreshProjects, refreshFiles]);
   useEffect(() => { if (project.persisted && loadedWorkspace === workspace) localStorage.setItem(storageKey(workspace), JSON.stringify(project)); }, [workspace, project, loadedWorkspace]);
+
+  // 监听快速采用后的自动跳转 - 关键：只监听 project.selected 变化
+  useEffect(() => {
+    if (!pendingQuickAdoptJump) return;
+
+    console.log('[useEffect-autoJump] === 检测到跳转请求 ===');
+    console.log('[useEffect-autoJump] 当前 project.selected 长度:', project.selected.length);
+    console.log('[useEffect-autoJump] 当前 project.libraryRefs 长度:', project.libraryRefs.length);
+    console.log('[useEffect-autoJump] 当前 view:', view);
+    console.log('[useEffect-autoJump] 当前 referenceStage:', referenceStage);
+
+    // 检查是否引用了写法库（即使没有自动勾选写法，也要跳转让用户手动选择）
+    if (project.libraryRefs.length === 0) {
+      console.log('[useEffect-autoJump] ⚠️ libraryRefs 为空，快速采用失败，不跳转');
+      setPendingQuickAdoptJump(false);
+      return;
+    }
+
+    console.log('[useEffect-autoJump] ✓ 已引用写法库，准备跳转');
+    if (project.selected.length > 0) {
+      console.log('[useEffect-autoJump] 自动匹配到了 ' + project.selected.length + ' 条写法:', project.selected);
+    } else {
+      console.log('[useEffect-autoJump] 未自动匹配到写法，跳转后让用户手动选择');
+    }
+
+    // 重置标记（在跳转前）
+    setPendingQuickAdoptJump(false);
+
+    // 延迟跳转，确保状态完全更新
+    setTimeout(() => {
+      console.log('[useEffect-autoJump] 开始执行跳转到"本书参考写法"页面');
+      console.log('[useEffect-autoJump] 调用 openReference(false) - 跳转到写法选择页');
+      openReference(false);  // false = 跳转到 "adopt-reference" (选择与确认)
+      console.log('[useEffect-autoJump] openReference 调用完成');
+      console.log('[useEffect-autoJump] ===========================');
+    }, 100);
+  }, [project.selected, project.libraryRefs, pendingQuickAdoptJump]);
   useEffect(() => {
     if (!project.pendingAssistantConfiguration || loadedWorkspace !== workspace) return;
     let active = true;
@@ -352,7 +415,7 @@ function NovelWorkbenchContent() {
     });
     const extra = catalog.filter(item => item.definition?.console?.app === "novel-workbench" && !STAGES.some(stage => workflowId(stage.id) === item.workflow_id)).map(item => {
       const meta = item.definition!.console!;
-      return { id: item.workflow_id.slice(PREFIX.length), title: meta.title || item.name, group: meta.group || "扩展流程", description: meta.description || "插件提供的创作步骤。", artifact: meta.artifact || "", optional: true, preferredFields: [], order: meta.order ?? 999 };
+      return { id: novelStageId(item.workflow_id)!, title: meta.title || item.name, group: meta.group || "扩展流程", description: meta.description || "插件提供的创作步骤。", artifact: meta.artifact || "", optional: true, preferredFields: [], order: meta.order ?? 999 };
     });
     return [...known, ...extra].sort((a,b) => a.order-b.order);
   }, [catalog]);
@@ -365,15 +428,41 @@ function NovelWorkbenchContent() {
   }, [stepItems, project.stageId, project.index, project.persisted, project.refs, project.completed, project.directionConfirmed, loadedWorkspace, workspace]);
   const referenceStages = STAGES.filter(stage => ["style-compatibility-advisor", "adopt-reference"].includes(stage.id));
   const referenceIndex = Math.max(0, referenceStages.findIndex(stage => stage.id === referenceStage));
+  // 为 reference 视图创建动态 project，始终使用最新的 selected 和 libraryRefs
+  const referenceProjectSnapshot = useMemo(() => ({
+    ...project,
+    index: referenceIndex,
+    stageId: referenceStages[referenceIndex].id,
+    autoNext: false,
+    autoScope: "manual" as const
+  }), [project, referenceIndex, referenceStages]);
   const setReferenceProject = useCallback<React.Dispatch<React.SetStateAction<Project>>>(update => {
     setProject(current => {
       const moduleProject = {...current, index: Math.max(0, referenceStages.findIndex(stage => stage.id === referenceStage)), stageId: referenceStage, autoNext: false, autoScope: "manual" as AutoScope};
       const next = typeof update === "function" ? update(moduleProject) : update;
+      console.log('[setReferenceProject] 更新后的 selected:', next.selected?.length || 0, '条');
+      console.log('[setReferenceProject] 更新后的 libraryRefs:', next.libraryRefs?.length || 0, '个');
       if (next.stageId && ["style-compatibility-advisor", "adopt-reference"].includes(next.stageId)) setReferenceStage(next.stageId);
       return {...next, index: current.index, stageId: current.stageId, autoNext: current.autoNext, autoScope: current.autoScope};
     });
   }, [referenceStage]);
-  const openReference = (advisor = false) => {setReferenceStage(advisor ? "style-compatibility-advisor" : "adopt-reference"); setView("reference");};
+  const openReference = (advisor = false) => {
+    const targetStage = advisor ? "style-compatibility-advisor" : "adopt-reference";
+    console.log('[openReference] === 函数被调用 ===');
+    console.log('[openReference] advisor 参数:', advisor);
+    console.log('[openReference] 目标阶段:', targetStage);
+    console.log('[openReference] 当前 referenceStage:', referenceStage);
+    console.log('[openReference] 当前 view:', view);
+
+    // 先设置 referenceStage，这会触发 useEffect 更新 referenceProjectSnapshot
+    setReferenceStage(targetStage);
+
+    // 然后设置 view，这会触发页面渲染
+    setView("reference");
+
+    console.log('[openReference] 跳转完成，目标: view=reference, stage=' + targetStage);
+    console.log('[openReference] ===============================');
+  };
   const continueAfterReferenceAdoption = useCallback(async () => {
     const setupStages = ["build", "character", "story-plan", "outline"];
     let check: Awaited<ReturnType<typeof checkNovelContinuation>> | null = null;
@@ -451,6 +540,7 @@ function NovelWorkbenchContent() {
         assessmentOnly: action === "assess", repairReviewOnly: action === "audit",
         autoChapterStarted: automatic && (!check || check.ready) ? (current.autoChapterStarted || 1) + 1 : current.autoChapterStarted,
         autoNext: action === "assess" || action === "audit" || (automatic && (!check || check.ready)),
+        autoController: 'server-v1', autoArmed: action === "assess" || action === "audit" || (automatic && (!check || check.ready)),
         autoScope: action === "assess" || action === "audit" ? "short_full" : automatic && (!check || check.ready) ? "serial_batch" : "manual",
         autoLaunchStage: action === "assess" || action === "audit" ? stage : automatic && (!check || check.ready) ? stage : "",
         continuationIssue: check && !check.ready ? check : null,
@@ -490,7 +580,7 @@ function NovelWorkbenchContent() {
       if (!sameWorkspace(activeWorkspace.current, requestedWorkspace)) return;
       const restored = mergeProjectState(workspace, result.state as Partial<Project>);
       lastSavedProject.current = JSON.stringify(restored);
-      setProject(operation === "regenerate" ? {...restored, autoNext:true, autoScope:"short_full",
+      setProject(operation === "regenerate" ? {...restored, autoNext:true, autoController:'server-v1', autoArmed:true, autoScope:"short_full",
         autoLaunchStage:"mvp", autoChapterStarted:1} : restored);
       setReviewChapter(chapter); setView(operation === "regenerate" ? "flow" : "chapters");
       setPageFeedback(`${operation === "regenerate" ? `第 ${Number(chapter)} 章已准备重新生成，正在启动正文流程。` : `第 ${Number(chapter)} 章已从正文目录删除，可在下方重新生成。`} ${preview.later_chapters.length ? `后续第 ${preview.later_chapters.map(Number).join("、")} 章需要衔接复核。` : ""} 原稿备份：${result.backup_path}`);
@@ -567,7 +657,7 @@ function NovelWorkbenchContent() {
     setPageFeedback(state.persisted ? `已保存「${title}」的作品设置。` : `「${title}」设置已应用到草稿，开始工作流后才会保存作品。`);
   };
   const refreshFilesFromHeader = async () => { setPageFeedback("正在读取作品资料…"); try { await refreshFiles(); setPageFeedback("作品资料已刷新。"); } catch (failure) { setPageFeedback(failure instanceof Error ? `刷新失败：${failure.message}` : "作品资料刷新失败，请稍后重试。"); } };
-  return <div className="h-full overflow-hidden bg-background"><div className="flex h-full min-h-0"><aside className="novel-sidebar hidden w-64 shrink-0 flex-col border-r border-border bg-card/80 lg:flex"><div className="border-b border-border px-6 py-6"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/15 text-primary"><BookOpen className="h-5 w-5" /></div><div><p className="font-semibold tracking-wide">XS2</p><p className="text-xs text-muted-foreground">小说工作台</p></div></div></div><nav className="space-y-1 p-4"><SidebarButton active={view === "home"} icon={BookOpen} label="我的作品" onClick={() => setView("home")} /><SidebarButton active={view === "archive"} icon={FileText} label="小说档案" onClick={() => setView("archive")} /><SidebarButton active={view === "chapters"} icon={ListChecks} label="章节目录" onClick={() => setView("chapters")} /><SidebarButton active={view === "flow"} icon={WandSparkles} label="创作流程" onClick={() => setView("flow")} /><SidebarButton active={view === "review"} icon={Headphones} label="读者评估" onClick={() => setView("review")} /><SidebarButton active={view === "library"} icon={Library} label="写法库" onClick={() => setView("library")} /><SidebarButton active={view === "reference"} icon={SlidersHorizontal} label="本书参考写法" onClick={() => openReference()} /><SidebarButton active={view === "humanware"} icon={Users} label="角色声音" onClick={() => setView("humanware")} /><SidebarButton active={view === "distill"} icon={Upload} label="资料蒸馏" onClick={() => setView("distill")} /><SidebarButton active={view === "settings"} icon={Settings2} label="作品设置" onClick={() => setView("settings")} /></nav><NovelUnitMotif /></aside><main className="min-w-0 flex-1 overflow-y-auto"><header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background/90 px-5 py-4 backdrop-blur lg:px-8"><div className="flex items-center gap-3"><div className="max-w-[360px] truncate rounded-lg border border-border bg-card px-3 py-2 text-xs">工作区 · {workspace}</div><span className="hidden text-xs text-muted-foreground xl:inline">{pageFeedback || "工作区中的作品资料会持续保存"}</span></div><div className="flex items-center gap-3"><NovelDisplaySettings /><button onClick={() => void refreshFilesFromHeader()} className="rounded-lg border border-border p-2 text-muted-foreground hover:text-foreground" title="刷新作品文件"><RefreshCw className={`h-4 w-4 ${loadingFiles ? "animate-spin" : ""}`} /></button><button aria-expanded={assistantOpen} onClick={() => { if(stepItems[project.index]?.id === "novel-advisor") {setView("flow");setAssistantOpen(false);} else setAssistantOpen(open=>!open); }} className="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground"><MessageCircle className="h-4 w-4" />创作助手</button></div></header><div className="novel-content mx-auto max-w-[1500px] px-5 py-6 lg:px-8">{pageFeedback && <p role="status" className="mb-4 rounded-xl border border-primary/25 bg-primary/5 p-3 text-sm text-primary">{pageFeedback}</p>}<div className="mb-4 flex flex-wrap gap-2 lg:hidden">{(["home", "archive", "flow", "library", "reference", "humanware", "distill", "settings", "chapters", "review"] as View[]).map((item,i) => <button key={item} onClick={() => setView(item)} className="rounded-lg border border-border px-3 py-2 text-sm">{["我的作品", "小说档案", "创作流程", "写法库", "本书参考写法", "角色声音", "资料蒸馏", "作品设置", "章节目录", "读者评估"][i]}</button>)}</div>{view === "archive" && <ArchiveView project={project} workspace={workspace} onBack={() => setView("home")} onFlow={() => setView("flow")} />}{view === "settings" && <SettingsView key={`${workspace}:${loadedWorkspace}`} project={project} onSave={saveSettings} onDistill={() => setView("distill")} onContinue={() => openFlow()} onLibrary={() => setView("library")} workspace={workspace} onBack={() => setView("home")} />}{view === "library" && <WritingLibraryView workflowId={workflowId("build")} project={project} workspace={workspace} onAttach={async (id, refresh = false) => { const attached = await attachWritingLibrary({workflow_id:workflowId("build"), workspace, library_id:id, refresh}); if (attached.already_attached) return; setProject(current => ({...current, writingMode:"reuse", libraryRefs:[...new Set([...current.libraryRefs,id])], selected:current.selected, refs:Object.fromEntries(Object.entries(current.refs).filter(([stage]) => !["style-compatibility-advisor"].includes(stage))), stageId:current.stageId, index:current.index})); }} onConfirm={() => openReference()} onBack={() => setView("home")} />}{view === "home" && <HomeView chapterOpening={chapterOpening} nextChapter={nextChapterNumber} onNextChapter={() => void openChapterProduction(nextChapterNumber)} project={project} projects={projectList} currentWorkspace={workspace} chapters={chapters} files={files} stageTitle={stepItems[project.index]?.title || "开始创作"} workspaceDraft={workspaceDraft} setWorkspaceDraft={setWorkspaceDraft} applyWorkspace={applyWorkspace} catalogError={catalogError} onNew={resetNew} onContinue={() => openFlow(project.index)} onChapters={() => setView("chapters")} onOpenFlowProject={(item) => selectProject(item, "flow")} onOpenArchive={(item) => selectProject(item, "archive")} onSettings={(item) => selectProject(item, "settings")} onDeleteProject={removeProject} />}{view === "chapters" && <ChapterView project={project} chapters={chapters} removedChapters={removedChapters} onRegenerate={chapter => void manageChapter(chapter, "regenerate")} onDelete={chapter => void manageChapter(chapter, "delete")} onCreateMissing={chapter => void openChapterProduction(chapter)} workspace={workspace} chapterOpening={chapterOpening} nextChapter={nextChapterNumber} onNextChapter={() => void openChapterProduction(nextChapterNumber)} onBack={() => setView("home")} onOpen={(chapter) => { setReviewChapter(chapter); setView("review"); }} onRepair={(chapter) => { setReviewChapter(chapter); setPageFeedback(`已打开第 ${Number(chapter)} 章返修，请查看该章读者报告并规划返修；缺少有效报告时可先重新评估。`); setView("review"); }} />}{view === "review" && <ReviewView project={project} workspace={workspace} chapter={reviewChapter || project.values.chapter_number} opening={chapterOpening} onBack={() => setView("chapters")} onFlow={() => setView("flow")} onAssess={() => void openChapterProduction(reviewChapter || project.values.chapter_number, "assess")} onAudit={() => void openChapterProduction(reviewChapter || project.values.chapter_number, "audit")} onRepairFlow={() => void openChapterProduction(reviewChapter || project.values.chapter_number)} onRepair={(feedbackPath, modelId) => repairChapter(feedbackPath, modelId, reviewChapter || project.values.chapter_number)} />}{view === "humanware" && <div className="space-y-6"><div className="flex items-center justify-between mb-6"><h1 className="text-2xl font-bold">角色声音锚点</h1><button onClick={() => setView("home")} className="rounded-lg border border-border px-4 py-2 text-sm">返回首页</button></div><CharacterVoiceEditor workspaceId={workspace} /></div>}<div hidden={view !== "distill"}><DistillationView catalog={catalog} onRefreshCatalog={refreshCatalog} onLibrary={() => setView("library")} /></div>{view === "reference" && <><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><p className="text-sm leading-7 text-muted-foreground">本书参考写法是可选准备。没有候选时也可以直接创作；新增参考不改动已有正文与创作进度。</p><div className="flex gap-2"><button onClick={() => openReference(true)} className="rounded-lg border border-border px-4 py-2 text-sm">让 AI 检查适配</button><button onClick={() => openReference()} className="rounded-lg border border-border px-4 py-2 text-sm">选择与确认</button><button onClick={() => setView("flow")} className="rounded-lg border border-primary/30 px-4 py-2 text-sm text-primary">返回创作流程</button></div></div><FlowView moduleOnly project={{...project, index:referenceIndex, stageId:referenceStages[referenceIndex].id, autoNext:false, autoScope:"manual"}} setProject={setReferenceProject} stages={referenceStages} currentStage={referenceStages[referenceIndex]} catalog={catalog} workspace={workspace} files={files} chapters={chapters} onHome={() => setView("library")} onRefreshCatalog={refreshCatalog} onRefreshFiles={refreshFiles} onReview={() => { setReviewChapter(project.values.chapter_number); setView("review"); }} onLibrary={() => setView("library")} onReferenceAdopted={continueAfterReferenceAdoption} onOpenAssistant={() => setAssistantOpen(true)} onOpenReference={openReference} /></>}{view === "flow" && <FlowView chapterOpening={chapterOpening} nextChapterNumber={nextChapterNumber} onContinueChapter={openChapterProduction} project={project} setProject={setProject} stages={stepItems} currentStage={stepItems[project.index] || stepItems[0]} catalog={catalog} workspace={workspace} files={files} chapters={chapters} onHome={() => setView("home")} onRefreshCatalog={refreshCatalog} onRefreshFiles={refreshFiles} onReview={() => { setReviewChapter(project.values.chapter_number); setView("review"); }} onLibrary={() => setView("library")} onReferenceAdopted={continueAfterReferenceAdoption} onOpenAssistant={() => setAssistantOpen(true)} onOpenReference={openReference} />}</div>{assistantOpen && stepItems[project.index]?.id !== "novel-advisor" && <aside aria-label="创作助手面板" className="novel-assistant-drawer fixed bottom-0 right-0 top-16 z-30 w-full max-w-[450px] overflow-y-auto border-l border-border bg-background px-4 py-5 shadow-2xl"><div className="mb-3 flex items-center justify-between"><span className="text-xs text-muted-foreground">本书共用一个助手 · 讨论与方案随作品保存</span><button aria-label="收起创作助手" onClick={()=>setAssistantOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-xs">收起</button></div><AssistantPanel key={workspace} workspace={workspace} project={project} setProject={setProject} currentStage={stepItems[project.index] || STAGES[1]} nextStage={stepItems[project.index+1]} candidateSet={null} impactInventory={outlineImpactInventory(files)} hasStoryFacts={files.some(file=>file.path==='meta/world_foundation.md')} onManualSelect={() => openReference()}/></aside>}</main></div></div>;
+  return <div className="h-full overflow-hidden bg-background"><div className="flex h-full min-h-0"><aside className="novel-sidebar hidden w-64 shrink-0 flex-col border-r border-border bg-card/80 lg:flex"><div className="border-b border-border px-6 py-6"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/15 text-primary"><BookOpen className="h-5 w-5" /></div><div><p className="font-semibold tracking-wide">XS2</p><p className="text-xs text-muted-foreground">小说工作台</p></div></div></div><nav className="space-y-1 p-4"><SidebarButton active={view === "home"} icon={BookOpen} label="我的作品" onClick={() => setView("home")} /><SidebarButton active={view === "archive"} icon={FileText} label="小说档案" onClick={() => setView("archive")} /><SidebarButton active={view === "chapters"} icon={ListChecks} label="章节目录" onClick={() => setView("chapters")} /><SidebarButton active={view === "flow"} icon={WandSparkles} label="创作流程" onClick={() => setView("flow")} /><SidebarButton active={view === "review"} icon={Headphones} label="读者评估" onClick={() => setView("review")} /><SidebarButton active={view === "library"} icon={Library} label="写法库" onClick={() => setView("library")} /><SidebarButton active={view === "reference"} icon={SlidersHorizontal} label="本书参考写法" onClick={() => openReference()} /><SidebarButton active={view === "humanware"} icon={Users} label="角色声音" onClick={() => setView("humanware")} /><SidebarButton active={view === "distill"} icon={Upload} label="资料蒸馏" onClick={() => setView("distill")} /><SidebarButton active={view === "settings"} icon={Settings2} label="作品设置" onClick={() => setView("settings")} /></nav><NovelUnitMotif /></aside><main className="min-w-0 flex-1 overflow-y-auto"><header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background/90 px-5 py-4 backdrop-blur lg:px-8"><div className="flex items-center gap-3"><div className="max-w-[360px] truncate rounded-lg border border-border bg-card px-3 py-2 text-xs">工作区 · {workspace}</div><span className="hidden text-xs text-muted-foreground xl:inline">{pageFeedback || "工作区中的作品资料会持续保存"}</span></div><div className="flex items-center gap-3"><NovelDisplaySettings /><button onClick={() => void refreshFilesFromHeader()} className="rounded-lg border border-border p-2 text-muted-foreground hover:text-foreground" title="刷新作品文件"><RefreshCw className={`h-4 w-4 ${loadingFiles ? "animate-spin" : ""}`} /></button><button aria-expanded={assistantOpen} onClick={() => { if(stepItems[project.index]?.id === "novel-advisor") {setView("flow");setAssistantOpen(false);} else setAssistantOpen(open=>!open); }} className="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground"><MessageCircle className="h-4 w-4" />创作助手</button></div></header><div className="novel-content mx-auto max-w-[1500px] px-5 py-6 lg:px-8">{pageFeedback && <p role="status" className="mb-4 rounded-xl border border-primary/25 bg-primary/5 p-3 text-sm text-primary">{pageFeedback}</p>}<div className="mb-4 flex flex-wrap gap-2 lg:hidden">{(["home", "archive", "flow", "library", "reference", "humanware", "distill", "settings", "chapters", "review"] as View[]).map((item,i) => <button key={item} onClick={() => setView(item)} className="rounded-lg border border-border px-3 py-2 text-sm">{["我的作品", "小说档案", "创作流程", "写法库", "本书参考写法", "角色声音", "资料蒸馏", "作品设置", "章节目录", "读者评估"][i]}</button>)}</div>{view === "archive" && <ArchiveView project={project} workspace={workspace} onBack={() => setView("home")} onFlow={() => setView("flow")} />}{view === "settings" && <SettingsView key={`${workspace}:${loadedWorkspace}`} project={project} onSave={saveSettings} onDistill={() => setView("distill")} onContinue={() => openFlow()} onLibrary={() => setView("library")} workspace={workspace} onBack={() => setView("home")} />}{view === "library" && <WritingLibraryView workflowId={workflowId("build")} project={project} workspace={workspace} onAttach={async (id, refresh = false) => { const attached = await attachWritingLibrary({workflow_id:workflowId("build"), workspace, library_id:id, refresh}); if (attached.already_attached) return; setProject(current => ({...current, writingMode:"reuse", libraryRefs:[...new Set([...current.libraryRefs,id])], selected:current.selected, refs:Object.fromEntries(Object.entries(current.refs).filter(([stage]) => !["style-compatibility-advisor"].includes(stage))), stageId:current.stageId, index:current.index})); }} onConfirm={() => openReference()} onBack={() => setView("home")} />}{view === "home" && <HomeView chapterOpening={chapterOpening} nextChapter={nextChapterNumber} onNextChapter={() => void openChapterProduction(nextChapterNumber)} project={project} projects={projectList} currentWorkspace={workspace} chapters={chapters} files={files} stageTitle={stepItems[project.index]?.title || "开始创作"} workspaceDraft={workspaceDraft} setWorkspaceDraft={setWorkspaceDraft} applyWorkspace={applyWorkspace} catalogError={catalogError} onNew={resetNew} onContinue={() => openFlow(project.index)} onChapters={() => setView("chapters")} onOpenFlowProject={(item) => selectProject(item, "flow")} onOpenArchive={(item) => selectProject(item, "archive")} onSettings={(item) => selectProject(item, "settings")} onDeleteProject={removeProject} />}{view === "chapters" && <ChapterView project={project} chapters={chapters} removedChapters={removedChapters} onRegenerate={chapter => void manageChapter(chapter, "regenerate")} onDelete={chapter => void manageChapter(chapter, "delete")} onCreateMissing={chapter => void openChapterProduction(chapter)} workspace={workspace} chapterOpening={chapterOpening} nextChapter={nextChapterNumber} onNextChapter={() => void openChapterProduction(nextChapterNumber)} onBack={() => setView("home")} onOpen={(chapter) => { setReviewChapter(chapter); setView("review"); }} onRepair={(chapter) => { setReviewChapter(chapter); setPageFeedback(`已打开第 ${Number(chapter)} 章返修，请查看该章读者报告并规划返修；缺少有效报告时可先重新评估。`); setView("review"); }} />}{view === "review" && <ReviewView project={project} workspace={workspace} chapter={reviewChapter || project.values.chapter_number} opening={chapterOpening} onBack={() => setView("chapters")} onFlow={() => setView("flow")} onAssess={() => void openChapterProduction(reviewChapter || project.values.chapter_number, "assess")} onAudit={() => void openChapterProduction(reviewChapter || project.values.chapter_number, "audit")} onRepairFlow={() => void openChapterProduction(reviewChapter || project.values.chapter_number)} onRepair={(feedbackPath, modelId) => repairChapter(feedbackPath, modelId, reviewChapter || project.values.chapter_number)} />}{view === "humanware" && <div className="space-y-6"><div className="flex items-center justify-between mb-6"><h1 className="text-2xl font-bold">角色声音锚点</h1><button onClick={() => setView("home")} className="rounded-lg border border-border px-4 py-2 text-sm">返回首页</button></div><CharacterVoiceEditor workspaceId={workspace} workflowId={workflowId("character")} /></div>}<div hidden={view !== "distill"}><DistillationView catalog={catalog} onRefreshCatalog={refreshCatalog} onLibrary={() => setView("library")} /></div>{view === "reference" && <><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><p className="text-sm leading-7 text-muted-foreground">本书参考写法是可选准备。没有候选时也可以直接创作；新增参考不改动已有正文与创作进度。</p><div className="flex gap-2"><button onClick={() => openReference(true)} className="rounded-lg border border-border px-4 py-2 text-sm">让 AI 检查适配</button><button onClick={() => openReference()} className="rounded-lg border border-border px-4 py-2 text-sm">选择与确认</button><button onClick={() => setView("flow")} className="rounded-lg border border-primary/30 px-4 py-2 text-sm text-primary">返回创作流程</button></div></div><FlowView moduleOnly project={referenceProjectSnapshot} setProject={setReferenceProject} stages={referenceStages} currentStage={referenceStages[referenceIndex]} catalog={catalog} workspace={workspace} files={files} chapters={chapters} onHome={() => setView("library")} onRefreshCatalog={refreshCatalog} onRefreshFiles={refreshFiles} onReview={() => { setReviewChapter(project.values.chapter_number); setView("review"); }} onLibrary={() => setView("library")} onReferenceAdopted={continueAfterReferenceAdoption} onOpenAssistant={() => setAssistantOpen(true)} onOpenReference={openReference} setPendingQuickAdoptJump={setPendingQuickAdoptJump} /></>}{view === "flow" && <FlowView onServerState={applyServerProject} chapterOpening={chapterOpening} nextChapterNumber={nextChapterNumber} onContinueChapter={openChapterProduction} project={project} setProject={setProject} stages={stepItems} currentStage={stepItems[project.index] || stepItems[0]} catalog={catalog} workspace={workspace} files={files} chapters={chapters} onHome={() => setView("home")} onRefreshCatalog={refreshCatalog} onRefreshFiles={refreshFiles} onReview={() => { setReviewChapter(project.values.chapter_number); setView("review"); }} onLibrary={() => setView("library")} onReferenceAdopted={continueAfterReferenceAdoption} onOpenAssistant={() => setAssistantOpen(true)} onOpenReference={openReference} setPendingQuickAdoptJump={setPendingQuickAdoptJump} />}</div>{assistantOpen && stepItems[project.index]?.id !== "novel-advisor" && <aside aria-label="创作助手面板" className="novel-assistant-drawer fixed bottom-0 right-0 top-16 z-30 w-full max-w-[450px] overflow-y-auto border-l border-border bg-background px-4 py-5 shadow-2xl"><div className="mb-3 flex items-center justify-between"><span className="text-xs text-muted-foreground">本书共用一个助手 · 讨论与方案随作品保存</span><button aria-label="收起创作助手" onClick={()=>setAssistantOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-xs">收起</button></div><AssistantPanel key={workspace} workspace={workspace} project={project} setProject={setProject} currentStage={stepItems[project.index] || STAGES[1]} nextStage={stepItems[project.index+1]} candidateSet={null} impactInventory={outlineImpactInventory(files)} hasStoryFacts={files.some(file=>file.path==='meta/world_foundation.md')} onManualSelect={() => openReference()} setPendingQuickAdoptJump={setPendingQuickAdoptJump}/></aside>}</main></div></div>;
 }
 
 function SidebarButton({ active, icon: Icon, label, onClick }: { active: boolean; icon: typeof BookOpen; label: string; onClick: () => void }) { return <button aria-current={active ? "page" : undefined} onClick={onClick} className={`novel-nav-item flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}><Icon className="h-4 w-4" />{label}</button>; }
@@ -866,11 +956,11 @@ function DistillationView({catalog,onRefreshCatalog,onLibrary}:{catalog:CatalogI
   return <div className="space-y-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">资料蒸馏</h1><p className="mt-2 text-sm leading-7 text-muted-foreground">独立分析参考作品，完成后自动进入共享写法库。不会登记成一本小说，也不改变当前作品的创作进度。</p></div><button onClick={()=>void fresh()} className="rounded-lg border border-border px-4 py-2 text-sm">新建资料任务</button></div>{feedback&&<p role="status" className="text-sm text-primary">{feedback}</p>}<label className="block max-w-xl text-sm">资料名称<input aria-label="资料名称" className={inputClass+' mt-2'} disabled={!!job.project.refs['reference-distillation']} value={job.project.title} onChange={e=>update(current=>({...current,title:e.target.value}))}/></label><FlowView key={job.workspace} moduleOnly project={job.project} setProject={update} stages={[STAGES[0]]} currentStage={STAGES[0]} catalog={catalog} workspace={job.workspace} files={jobFiles} chapters={[]} onHome={onLibrary} onRefreshCatalog={onRefreshCatalog} onRefreshFiles={refresh} onReview={onLibrary} onLibrary={onLibrary}/></div>;
 }
 
-function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter, moduleOnly = false, project, setProject, stages, currentStage, catalog, workspace, files, chapters, onHome, onRefreshCatalog, onRefreshFiles, onReview, onLibrary, onReferenceAdopted, onOpenAssistant, onOpenReference }: { chapterOpening?: boolean; nextChapterNumber?: string; onContinueChapter?: (chapter: string, action?: string, automatic?: boolean) => Promise<void>; moduleOnly?: boolean; project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; stages: StageMeta[]; currentStage: StageMeta; catalog: CatalogItem[]; workspace: string; files: WorkspaceFile[]; chapters: Array<{ number: string; file: WorkspaceFile }>; onHome: () => void; onRefreshCatalog: () => Promise<void>; onRefreshFiles: () => Promise<void>; onReview: () => void; onLibrary: () => void; onReferenceAdopted?: () => Promise<void>; onOpenAssistant?: () => void; onOpenReference?: (advisor?: boolean) => void }) {
+function FlowView({ onServerState, chapterOpening = false, nextChapterNumber, onContinueChapter, moduleOnly = false, project, setProject, stages, currentStage, catalog, workspace, files, chapters, onHome, onRefreshCatalog, onRefreshFiles, onReview, onLibrary, onReferenceAdopted, onOpenAssistant, onOpenReference, setPendingQuickAdoptJump }: { onServerState?: (state: Project) => void; chapterOpening?: boolean; nextChapterNumber?: string; onContinueChapter?: (chapter: string, action?: string, automatic?: boolean) => Promise<void>; moduleOnly?: boolean; project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; stages: StageMeta[]; currentStage: StageMeta; catalog: CatalogItem[]; workspace: string; files: WorkspaceFile[]; chapters: Array<{ number: string; file: WorkspaceFile }>; onHome: () => void; onRefreshCatalog: () => Promise<void>; onRefreshFiles: () => Promise<void>; onReview: () => void; onLibrary: () => void; onReferenceAdopted?: () => Promise<void>; onOpenAssistant?: () => void; onOpenReference?: (advisor?: boolean) => void; setPendingQuickAdoptJump?: React.Dispatch<React.SetStateAction<boolean>> }) {
 
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]); const [importUrl, setImportUrl] = useState(""); const [importUrlBusy, setImportUrlBusy] = useState(false); const [importUrlError, setImportUrlError] = useState(""); const [importWarnings, setImportWarnings] = useState<string[]>([]); const [importChapters, setImportChapters] = useState<Array<{ index: number; title: string; url: string; selected?: boolean }>>([]); const [urlImported, setUrlImported] = useState(false); const [libraryName, setLibraryName] = useState(""); const [saveMessage, setSaveMessage] = useState(""); const [savingLibrary, setSavingLibrary] = useState(false); const [refreshingCatalog, setRefreshingCatalog] = useState(false); const [refreshingFiles, setRefreshingFiles] = useState(false);
   const [task, setTask] = useState<any>(null); const [verified, setVerified] = useState(false); const [launching, setLaunching] = useState(false); const [error, setError] = useState(""); const [actionFeedback, setActionFeedback] = useState(""); const [preview, setPreview] = useState(""); const [modelPending, setModelPending] = useState(false); const [candidateSet, setCandidateSet] = useState<CandidateSet | null>(null); const [showAllFields, setShowAllFields] = useState(false);
-  const launchGuard = useRef(false); const autoAdvancedKey = useRef(""); const autoStartedKey = useRef(""); const autoStartIndex = useRef<number | null>(null); const autoPublishedKey = useRef(""); const outlineConfirmed = useRef(false); const outlineSnapshot = useRef<{taskId: string; content: string; inventory: ReturnType<typeof outlineImpactInventory>} | null>(null); const outlineReportedTask = useRef(""); const filesRefreshedTask = useRef(""); const adoptionNotified = useRef(""); const [outlineImpactOpen, setOutlineImpactOpen] = useState(false); const [outlineUpdateReport, setOutlineUpdateReport] = useState<(ReturnType<typeof compareNovelOutlines> & {inventory: ReturnType<typeof outlineImpactInventory>}) | null>(null); const outlineInventory = useMemo(() => outlineImpactInventory(files), [files]); const stageIndex = Math.max(0, stages.findIndex((item) => item.id === currentStage.id)); const ref = project.refs[currentStage.id]; const workflow = catalog.find((item) => item.workflow_id === workflowId(currentStage.id)); const busy = launching || (!!task && !terminal.includes(task.status)); const done = verified && task?.status === "completed" && task.workflow_id === workflowId(currentStage.id) && task.task_id === ref?.task_id; const outlineHasExisting = currentStage.id === "outline" && (files.some(file => file.path === "outline/near_term_outline.md") || (done && preview.trim().length > 0)); const variables = workflow?.definition?.variables || [];
+  const launchGuard = useRef(false); const autoAdvancedKey = useRef(""); const autoStartedKey = useRef(""); const autoStartIndex = useRef<number | null>(null); const autoPublishedKey = useRef(""); const outlineConfirmed = useRef(false); const outlineSnapshot = useRef<{taskId: string; content: string; inventory: ReturnType<typeof outlineImpactInventory>} | null>(null); const outlineReportedTask = useRef(""); const filesRefreshedTask = useRef(""); const adoptionNotified = useRef(""); const [outlineImpactOpen, setOutlineImpactOpen] = useState(false); const [outlineUpdateReport, setOutlineUpdateReport] = useState<(ReturnType<typeof compareNovelOutlines> & {inventory: ReturnType<typeof outlineImpactInventory>}) | null>(null); const outlineInventory = useMemo(() => outlineImpactInventory(files), [files]); const stageIndex = Math.max(0, stages.findIndex((item) => item.id === currentStage.id)); const ref = project.refs[currentStage.id]; const workflow = catalog.find((item) => item.workflow_id === workflowId(currentStage.id)); const busy = (project.autoController === "server-v1" && project.autoArmed === true && project.autoNext) || launching || (!!task && !terminal.includes(task.status)); const done = verified && task?.status === "completed" && task.workflow_id === workflowId(currentStage.id) && task.task_id === ref?.task_id; const outlineHasExisting = currentStage.id === "outline" && (files.some(file => file.path === "outline/near_term_outline.md") || (done && preview.trim().length > 0)); const variables = workflow?.definition?.variables || [];
   // URL 导入结果写在作品工作区里，页面刷新后文件选择状态会丢失；通过工作区文件恢复“已有语料”状态。
   const importedCorpusPresent = files.some((file) => file.path === "references/url-imported-corpus.txt") || project.values.reference_path === "references/url-imported-corpus.txt";
   const [adoptedIds, setAdoptedIds] = useState<string[]>([]);
@@ -953,7 +1043,22 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
       setSaveMessage(failure instanceof Error ? `自动登记失败：${failure.message}` : `自动登记失败：${String(failure)}`);
     });
   }, [currentStage.id, done, libraryName, preview, project.title, project.values.genre, project.values.language, project.values.narrative_pov, ref?.task_id, workspace]);
-  useEffect(() => { let active = true; setCandidateSet(null); if (!["reference-distillation", "novel-advisor", "style-compatibility-advisor", "adopt-reference"].includes(currentStage.id)) return; void getNovelReferenceCandidates(workflowId("build"), workspace).then(output => { if(active) setCandidateSet(output as CandidateSet); }).catch(() => { if(active) setCandidateSet(null); }); return () => { active=false; }; }, [currentStage.id, workspace, project.libraryRefs, project.refs["reference-distillation"]?.task_id]);
+  useEffect(() => {
+    let active = true;
+    // 不要立即清空 candidateSet，避免快速采用跳转时看到空白
+    // setCandidateSet(null);  // ← 注释掉这一行
+    if (!["reference-distillation", "novel-advisor", "style-compatibility-advisor", "adopt-reference"].includes(currentStage.id)) {
+      // 只有在不相关的页面时才清空
+      setCandidateSet(null);
+      return;
+    }
+    void getNovelReferenceCandidates(workflowId("build"), workspace).then(output => {
+      if(active) setCandidateSet(output as CandidateSet);
+    }).catch(() => {
+      if(active) setCandidateSet(null);
+    });
+    return () => { active=false; };
+  }, [currentStage.id, workspace, project.libraryRefs, project.refs["reference-distillation"]?.task_id]);
   const skipPreparation = () => moduleOnly ? onHome() : setProject(current => ({ ...current, directionConfirmed:true, autoLaunchStage:"", autoPauseReason:"", index:stages.findIndex(stage => stage.id === "build"), stageId:"build" }));
   const inspectUrl = async () => { setImportUrlError(""); setImportWarnings([]); setImportUrlBusy(true); try { const result = await inspectNovelImportUrl(importUrl.trim()); setImportChapters(result.chapters); setImportWarnings(result.warnings || []); if (!result.chapters.length && !result.has_page_text) throw new Error("番茄页面没有识别到正文或章节"); } catch (failure) { setImportUrlError(failure instanceof Error ? failure.message : String(failure)); } finally { setImportUrlBusy(false); } };
   const fetchUrl = async () => { setImportUrlError(""); setImportUrlBusy(true); try { const selected = importChapters.filter(chapter => chapter.selected); const result = await importNovelUrl({ workflow_id:workflowId("reference-distillation"), workspace, url:importUrl.trim(), source_mode:project.values.reference_mode || "auto", chapters:selected }); setUrlImported(true); setImportWarnings(result.warnings || importWarnings); setProject(current => ({...current, writingMode:"distill", values:{...current.values, reference_path:result.path}})); setImportUrlError(`已导入 ${result.chapter_count} 个番茄小说章节，可开始蒸馏。`); } catch (failure) { setImportUrlError(failure instanceof Error ? failure.message : String(failure)); } finally { setImportUrlBusy(false); } };
@@ -1020,14 +1125,21 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
     reference_choices_sha256:candidateSet.reference_choices_sha256,
     selected_style_ids:retainAdoptedWriting(project.selectedStyles || [], adoptedStyles),
     selected_conflict_ids:retainAdoptedWriting(project.selectedConflicts || [], adoptedConflicts),
-    reference_adaptations:project.referenceAdaptations || {} }); } const inputs = Object.fromEntries((definition.variables || []).filter((field) => field.source_type !== "output" && (field.type !== "file" || field.key === "author_feedback_file") && parameters[field.key] !== undefined).map((field) => [field.key, parameters[field.key]])); const missing = (definition.variables || []).find((field) => field.required && !field.hidden && field.type !== "file" && !(inputs[field.key] ?? field.default ?? "").trim()); if (missing) throw new Error(`请先填写${missing.name || missing.key}。`); setActionFeedback("参数已校验，正在创建任务…"); const repairModels = (project.repairReviewOnly || (project.readerRepairCount || 0) > 0) && project.repairModel && ["polish", "reader-sim"].includes(currentStage.id) ? repairNodeModels(definition, project.repairModel) : undefined; const created = await createTask(workflowId(currentStage.id), inputs, undefined, undefined, workspace, undefined, undefined, repairModels); const nextRef = { workflow_id: workflowId(currentStage.id), task_id: created.task_id };
+    reference_adaptations:project.referenceAdaptations || {} }); } const inputs = Object.fromEntries((definition.variables || []).filter((field) => field.source_type !== "output" && (field.type !== "file" || field.key === "author_feedback_file") && parameters[field.key] !== undefined).map((field) => [field.key, parameters[field.key]])); const missing = (definition.variables || []).find((field) => field.required && !field.hidden && field.type !== "file" && !(inputs[field.key] ?? field.default ?? "").trim()); if (missing) throw new Error(`请先填写${missing.name || missing.key}。`); setActionFeedback("参数已校验，正在创建任务…"); const repairModels = (project.repairReviewOnly || (project.readerRepairCount || 0) > 0) && project.repairModel && ["polish", "reader-sim"].includes(currentStage.id) ? repairNodeModels(definition, project.repairModel) : undefined; if (!moduleOnly && project.autoNext) {
+        const result = await controlAutomation('start', workflowId('build'), workspace,
+          {...project, stageId: currentStage.id, persisted: true, autoController: 'server-v1', autoArmed: true});
+        onServerState?.(result.state);
+        setActionFeedback('已交给后台自动创作，可以切换页面或关闭浏览器。');
+        return;
+      }
+      const created = await createTask(workflowId(currentStage.id), inputs, undefined, undefined, workspace, undefined, undefined, repairModels); const nextRef = { workflow_id: workflowId(currentStage.id), task_id: created.task_id };
         if (currentStage.id === "outline") {
           outlineSnapshot.current = previousOutline.trim() ? { taskId: created.task_id, content: previousOutline, inventory: outlineInventory } : null;
           outlineConfirmed.current = false;
           setOutlineImpactOpen(false);
           setOutlineUpdateReport(null);
         }
-        setProject((current) => ({ ...current, persisted: true, autoLaunchStage: "", autoPauseReason: "", refs: { ...current.refs, [currentStage.id]: nextRef }, directionConfirmed: current.directionConfirmed || currentStage.id === "adopt-reference", advisorAccepted: currentStage.id === "novel-advisor" ? true : current.advisorAccepted })); setActionFeedback(`任务 ${created.task_id} 已创建，正在启动…`); await runTask(workflowId(currentStage.id), created.task_id); setTask({ ...nextRef, status: "running", name: definition.name }); setActionFeedback(`任务 ${created.task_id} 已启动，正在执行…`); } catch (failure) { if (currentStage.id === "outline") outlineConfirmed.current = false; const errorMsg = failure instanceof Error ? failure.message : "启动失败"; const isBusy = errorMsg.includes('仍有创作或评估任务正在处理') || errorMsg.includes('正在处理'); setError(isBusy ? "⚠️ 当前有其他任务正在运行，请等待完成后再启动新任务。可以刷新工作流查看任务状态。" : errorMsg); setActionFeedback(isBusy ? "启动被阻止：有任务正在执行。等待完成或停止该任务后重试。" : "启动没有完成，请查看下方提示后重试。"); setProject(current => ({ ...current, autoNext: false, autoScope: "manual", autoLaunchStage: "", autoPauseReason: current.autoNext || current.autoLaunchStage ? (isBusy ? "有其他任务正在运行，自动流程已暂停。" : "自动启动失败，请处理错误后重新启用。") : "" })); } finally { launchGuard.current = false; setLaunching(false); } }, [available, busy, canAddWriting, adoptionReady, adoptedIds, adoptedStyles, adoptedConflicts, candidateSet, currentStage.id, done, files, importedCorpusPresent, outlineHasExisting, outlineInventory, preview, project.selected, project.selectedStyles, project.selectedConflicts, project.referenceAdaptations, project.values, project.repairReviewOnly, project.repairModel, project.readerRepairCount, modelPending, referenceFiles, urlImported, workspace, stages, setProject, onOpenAssistant]);
+        setProject((current) => ({ ...current, persisted: true, autoLaunchStage: "", autoPauseReason: "", refs: { ...current.refs, [currentStage.id]: nextRef }, directionConfirmed: current.directionConfirmed || currentStage.id === "adopt-reference", advisorAccepted: currentStage.id === "novel-advisor" ? true : current.advisorAccepted })); setActionFeedback(`任务 ${created.task_id} 已创建，正在启动…`); await runTask(workflowId(currentStage.id), created.task_id); setTask({ ...nextRef, status: "running", name: definition.name }); setActionFeedback(`任务 ${created.task_id} 已启动，正在执行…`); } catch (failure) { if (currentStage.id === "outline") outlineConfirmed.current = false; const errorMsg = failure instanceof Error ? failure.message : "启动失败"; const isBusy = errorMsg.includes('仍有创作或评估任务正在处理') || errorMsg.includes('正在处理'); setError(isBusy ? "⚠️ 当前有其他任务正在运行，请等待完成后再启动新任务。可以刷新工作流查看任务状态。" : errorMsg); setActionFeedback(isBusy ? "启动被阻止：有任务正在执行。等待完成或停止该任务后重试。" : "启动没有完成，请查看下方提示后重试。"); setProject(current => ({ ...current, autoNext: false, autoScope: "manual", autoLaunchStage: "", autoPauseReason: current.autoNext || current.autoLaunchStage ? (isBusy ? "有其他任务正在运行，自动流程已暂停。" : "自动启动失败，请处理错误后重新启用。") : "" })); } finally { launchGuard.current = false; setLaunching(false); } }, [available, busy, canAddWriting, adoptionReady, adoptedIds, adoptedStyles, adoptedConflicts, candidateSet, currentStage.id, done, files, importedCorpusPresent, outlineHasExisting, outlineInventory, preview, project.selected, project.selectedStyles, project.selectedConflicts, project.referenceAdaptations, project.values, project.repairReviewOnly, project.repairModel, project.readerRepairCount, modelPending, referenceFiles, urlImported, workspace, stages, setProject, onOpenAssistant, moduleOnly, project, onServerState]);
   let readerVerdict = "";
   if (currentStage.id === "reader-sim") { try { readerVerdict = JSON.parse(preview).verdict || ""; } catch { /* Wait for a valid report. */ } }
   const readerNeedsRepair = ["revise", "reject"].includes(readerVerdict);
@@ -1035,6 +1147,7 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
   repairProject.current = project;
   const polishIndex = stages.findIndex(item => item.id === 'polish');
   useEffect(() => {
+    if (project.autoController === "server-v1") return;
     if (!project.autoNext || !project.autoRepairPlanId || currentStage.id !== 'reader-sim') return;
     let active = true;
     let timer: number | undefined;
@@ -1070,6 +1183,7 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
     return () => {active = false; if (timer) window.clearTimeout(timer);};
   }, [project.autoNext, project.autoRepairPlanId, project.values.chapter_number, currentStage.id, workspace, polishIndex, setProject]);
   useEffect(() => {
+    if (project.autoController === "server-v1") return;
     if (!project.autoNext || !task || !terminal.includes(task.status) || task.status === 'completed' || task.task_id !== ref?.task_id) return;
     const reason = `当前步骤${statusLabel(task.status)}，自动推进已暂停。请查看任务详情并处理后再继续。`;
     setActionFeedback(reason);
@@ -1102,6 +1216,7 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
     await onContinueChapter(String(Number(project.values.chapter_number || "1") + 1).padStart(4, "0"), "write", project.autoNext && project.autoScope === "serial_batch");
   }, [onContinueChapter, chapterOpening, project.values.chapter_number, project.autoNext, project.autoScope]);
   useEffect(() => {
+    if (project.autoController === "server-v1") return;
     if (!project.autoNext || project.autoScope === "manual" || !done) return;
     const key = `${currentStage.id}:${ref?.task_id || ""}`;
     if (autoAdvancedKey.current === key) return;
@@ -1137,6 +1252,7 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
     if (stageIndex < stages.length - 1) completeAndNext();
   }, [completeAndNext, currentStage.id, done, nextChapter, project.autoChapterLimit, project.autoChapterStarted, project.autoNext, project.autoScope, project.mode, project.repairReviewOnly, project.assessmentOnly, project.values.chapter_ending_mode, ref?.task_id, stageIndex, stages, readerVerdict, setProject, onReview]);
   useEffect(() => {
+    if (project.autoController === "server-v1") return;
     if (!project.autoNext || project.autoScope === "manual" || (autoStartIndex.current !== stageIndex && project.autoLaunchStage !== currentStage.id) || ref || launching || task) return;
     const key = `${currentStage.id}:${stageIndex}:${project.values.chapter_number}:${project.readerRepairCount || 0}`;
     if (autoStartedKey.current === key) return;
@@ -1147,7 +1263,20 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
     autoStartedKey.current = key; autoStartIndex.current = null;
     void launch();
   }, [available, catalog.length, currentStage.id, launch, launching, project.autoNext, project.autoScope, project.autoLaunchStage, project.readerRepairCount, project.values.chapter_number, ref, stageIndex, task, setProject]);
-  const setAuto = (checked: boolean) => { autoAdvancedKey.current = ""; autoStartedKey.current = ""; setProject(current => ({ ...current, autoNext: checked, autoScope: checked ? (current.mode === "serial" ? "serial_batch" : "short_full") : "manual", autoChapterStarted: checked && current.mode === "serial" ? 1 : null, autoPauseReason: "", autoLaunchStage: "", autoRepairPlanId: "", repairReviewOnly: false })); };
+  const setAuto = async (checked: boolean) => {
+    autoAdvancedKey.current = ''; autoStartedKey.current = '';
+    if (!checked && project.autoController === 'server-v1' && project.autoArmed) {
+      try {
+        const result = await controlAutomation('stop', workflowId('build'), workspace, project);
+        onServerState?.(result.state);
+        setActionFeedback('自动推进已暂停，当前任务会继续完成。');
+      } catch (failure) {setError(failure instanceof Error ? failure.message : '暂停失败');}
+      return;
+    }
+    setProject(current => ({...current, autoNext: checked, autoController: 'server-v1', autoArmed: checked && !!current.refs[currentStage.id],
+      autoScope: checked ? (current.mode === 'serial' ? 'serial_batch' : 'short_full') : 'manual',
+      autoChapterStarted: checked && current.mode === 'serial' ? 1 : null, autoPauseReason: '', autoLaunchStage: '', autoRepairPlanId: '', repairReviewOnly: false}));
+  };
   const advisorMode = !moduleOnly && currentStage.id === "novel-advisor";
   const hasStoryFacts = files.some(file => /^(meta\/(world_foundation|character_profiles)|story\/.*chapter\.md)/.test(file.path));
   const fieldsForStage = currentStage.id === "adopt-reference" ? [] : visibleVariables.filter(field => !(["novel-advisor", "story-plan", "outline"].includes(currentStage.id) && ["conflict_plan_mode", "conflict_point_count", "foreshadowing_count"].includes(field.key)));
@@ -1174,7 +1303,7 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
     {project.assessmentOnly && <p role="status" className="rounded-xl border border-primary/30 p-4 text-sm text-primary">仅重新评估指定章节，完成后回到该章读者页，不会生成下一章或修改正文。</p>}
     {project.autoRepairPlanId && <p role="status" className="rounded-xl border border-primary/30 bg-primary/10 p-4 text-sm leading-7 text-primary"><Loader2 className="mr-2 inline h-4 w-4 animate-spin"/>AI 正在根据本章正文和完整读者报告制定第 {(project.readerRepairCount || 0) + 1} 轮返修方案。随后会按方案修改、重新评估；通过后才继续审核与导出。请保持本页打开，方案与状态会保存。</p>}
     {project.repairReviewOnly && <p role="status" className="rounded-xl border border-primary/30 bg-primary/10 p-4 text-sm leading-7 text-primary">正在按已确认的 AI 方案返修本章：润色返修 → 模拟读者复评 → 通过后同步档案，再回到读者页。未通过时暂停并展示问题。请保持本页打开。</p>}
-    {!moduleOnly && !advisorMode && <section className={`${cardClass} p-4`}><div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><Sparkles className="h-5 w-5" /></div><div><p className="font-medium">自动下一步</p><p className="text-xs text-muted-foreground">从当前步骤开始，自动推进；有问题时先由 AI 规划，再返修复评，通过后导出。需保持创作页面打开；关闭后回来可恢复。</p></div></div><div className="flex flex-wrap items-center gap-3"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={project.autoNext} disabled={busy} onChange={(event) => setAuto(event.target.checked)} />启用</label>{project.autoNext && <><label className="flex items-center gap-2 text-xs">每章最多返修<select aria-label="每章自动返修上限" value={project.autoRepairLimit || 2} onChange={event => setProject(current => ({ ...current, autoRepairLimit: Number(event.target.value) }))} className="rounded-lg border border-border bg-background px-2 py-2">{[1,2,3,5].map(count => <option key={count} value={count}>{count} 次</option>)}</select></label><select value={project.autoScope} onChange={(event) => setProject((current) => ({ ...current, autoScope: event.target.value as AutoScope }))} className="rounded-lg border border-border bg-background px-2 py-2 text-xs"><option value="short_full">自动完成本篇</option><option value="serial_batch">自动推进指定章节</option></select>{project.mode === "serial" && <select value={project.autoChapterLimit} onChange={(event) => setProject((current) => ({ ...current, autoChapterLimit: Number(event.target.value), autoChapterStarted: 1 }))} className="rounded-lg border border-border bg-background px-2 py-2 text-xs"><option value={1}>1 章</option><option value={3}>3 章</option><option value={5}>5 章</option><option value={10}>10 章</option></select>}</>}</div></div></section>}
+    {!moduleOnly && !advisorMode && <section className={`${cardClass} p-4`}><div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><Sparkles className="h-5 w-5" /></div><div><p className="font-medium">自动下一步</p><p className="text-xs text-muted-foreground">从当前步骤开始，自动推进；有问题时先由 AI 规划，再返修复评，通过后导出。后台持续推进，可切换页面或关闭浏览器；请保持启动窗口运行。</p></div></div><div className="flex flex-wrap items-center gap-3"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={project.autoNext} disabled={launching} onChange={(event) => void setAuto(event.target.checked)} />启用</label>{project.autoNext && <><label className="flex items-center gap-2 text-xs">每章最多返修<select disabled={project.autoArmed} aria-label="每章自动返修上限" value={project.autoRepairLimit || 2} onChange={event => setProject(current => ({ ...current, autoRepairLimit: Number(event.target.value) }))} className="rounded-lg border border-border bg-background px-2 py-2">{[1,2,3,5].map(count => <option key={count} value={count}>{count} 次</option>)}</select></label><select disabled={project.autoArmed} value={project.autoScope} onChange={(event) => setProject((current) => ({ ...current, autoScope: event.target.value as AutoScope }))} className="rounded-lg border border-border bg-background px-2 py-2 text-xs"><option value="short_full">自动完成本篇</option><option value="serial_batch">自动推进指定章节</option></select>{project.mode === "serial" && <select disabled={project.autoArmed} value={project.autoChapterLimit} onChange={(event) => setProject((current) => ({ ...current, autoChapterLimit: Number(event.target.value), autoChapterStarted: 1 }))} className="rounded-lg border border-border bg-background px-2 py-2 text-xs"><option value={1}>1 章</option><option value={3}>3 章</option><option value={5}>5 章</option><option value={10}>10 章</option></select>}</>}</div></div></section>}
     {project.autoPauseReason && <p role="alert" className="rounded-xl border border-amber-300/25 bg-amber-300/5 p-4 text-sm leading-7 text-amber-300">{project.autoPauseReason}</p>}
     {project.continuationIssue && <section role="alert" className={`${cardClass} border-amber-300/35 bg-amber-300/5 p-5`}><div className="flex items-start gap-3"><CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-300"/><div className="min-w-0 flex-1"><h3 className="font-semibold">正文前置检查已拦截</h3><p className="mt-2 text-sm leading-7">第 {Number(project.continuationIssue.chapter)} 章尚不能安全启动：{project.continuationIssue.message}</p>{project.continuationIssue.action === "outline" ? <><p className="mt-2 text-sm leading-7 text-muted-foreground">原采用方案仍会保留供对照。重新生成近期大纲本身不会更新这份章节方案；需要在剧情讨论中重新规划并确认采用，正文生成前会再次自动核对。</p><button onClick={() => { setProject(current => ({...current, assistantPlan:chapterPlanRefreshPrompt(project.continuationIssue!.chapter, project.continuationIssue!.message)})); onOpenAssistant?.(); }} className="mt-4 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">打开创作助手，重新规划第 {Number(project.continuationIssue.chapter)} 章</button></> : <p className="mt-2 text-sm text-muted-foreground">请先完成左侧「{stages.find(stage => stage.id === project.continuationIssue?.action)?.title || project.continuationIssue.action}」步骤，然后重新启动正文。</p>}</div></div></section>}
     {outlineImpactOpen && currentStage.id === "outline" && <section role="alertdialog" aria-label="确认更新大纲的影响" className={`${cardClass} border-amber-300/35 bg-amber-300/5 p-5`}><div className="flex items-start gap-3"><CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" /><div className="min-w-0 flex-1"><h3 className="font-semibold">重新生成大纲前，请确认影响范围</h3><p className="mt-2 text-sm leading-7 text-muted-foreground">系统发现本书已经有一版大纲。新大纲会作为新的规划依据，旧版会自动备份；它不会静默改写已经写出的正文或已确认档案。</p><div className="mt-4 grid gap-3 sm:grid-cols-3"><div className="rounded-xl border border-border bg-background/50 p-3"><p className="text-xs text-muted-foreground">已有章节计划</p><p className="mt-1 text-lg font-semibold">{outlineInventory.plannedChapters.length} 章</p></div><div className="rounded-xl border border-border bg-background/50 p-3"><p className="text-xs text-muted-foreground">已有正文</p><p className="mt-1 text-lg font-semibold">{outlineInventory.writtenChapters.length} 章</p></div><div className="rounded-xl border border-border bg-background/50 p-3"><p className="text-xs text-muted-foreground">已确认档案</p><p className="mt-1 text-lg font-semibold">{outlineInventory.confirmedChapters.length} 章</p></div></div><div className="mt-3 space-y-1 rounded-lg bg-background/40 p-3 text-xs leading-6 text-muted-foreground"><p>章节计划：{chapterListSummary(outlineInventory.plannedChapters)}</p><p>已写正文：{chapterListSummary(outlineInventory.writtenChapters)}</p><p>已确认档案：{chapterListSummary(outlineInventory.confirmedChapters)}</p></div><ul className="mt-4 space-y-2 text-sm leading-6 text-muted-foreground"><li>• 章节计划：受影响章节需要重新核对；如果已采用的方案依据已变化，正文生成前会拦截并引导你重新讨论、采用。</li><li>• 正文与档案：已写内容和已确认事实会保留，不会被自动覆盖或删除；需要你决定是否返修，返修后再重新审核档案。</li><li>• 伏笔与后续：除直接变更章节外，后续章节的因果、人物动机、冲突升级和伏笔回收也要复核。</li><li>• 移除章节：移出新大纲不等于删除已有计划或正文，需明确保留、改写或归档。</li><li>• 旧版大纲：会自动备份，方便回看和恢复。</li></ul><div className="mt-5 flex flex-wrap gap-3"><button onClick={() => { outlineConfirmed.current = true; setOutlineImpactOpen(false); setActionFeedback("已确认影响范围，正在重新生成大纲…"); void launch(); }} disabled={busy} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">确认影响并重新生成</button><button onClick={() => { setOutlineImpactOpen(false); setActionFeedback("已保留当前大纲，未创建更新任务。现有正文与档案不受影响。"); }} disabled={busy} className="rounded-xl border border-border px-4 py-2.5 text-sm">暂不更新</button></div></div></div></section>}
@@ -1229,7 +1358,7 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
       <section className={`${cardClass} min-w-0 p-6`}>
         <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs text-primary">第 {stageIndex + 1} 步 / 共 {stages.length} 步</p><h2 className="mt-2 text-2xl font-semibold">{advisorMode ? "AI 小说顾问：先聊想法，再确定写法" : currentStage.title}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{advisorMode ? "在正式创作前，AI 帮你判断这本小说写什么、主要看点是什么、适合怎么写。有一句想法就能开始，还没想好也可以一起讨论。" : currentStage.description}</p></div><div className="flex items-center gap-2 text-xs text-muted-foreground">{available ? <><span className="h-2 w-2 rounded-full bg-emerald-400" />工作流已连接</> : <><span className="h-2 w-2 rounded-full bg-amber-400" />等待插件工作流</>}</div></div>
         {available && currentStage.id !== "export" && <NovelStepModels workflowId={workflowId(currentStage.id)} task={task} disabled={busy} onPendingChange={setModelPending} onSaved={() => { setActionFeedback("模型设置已同步到工作流，后续新任务会读取新配置。"); }} />}
-        {advisorMode ? <><AssistantPanel advisorMode workflowBusy={busy} hasStoryFacts={hasStoryFacts} key={workspace} workspace={workspace} project={project} setProject={setProject} currentStage={currentStage} nextStage={stages[stageIndex + 1]} candidateSet={candidateSet} impactInventory={outlineInventory} onAdoptAdvisor={entry => {const outcome=adoptNovelAdvisor(project, entry, FALLBACK_DEFAULTS, stages, hasStoryFacts); if(outcome.success) setProject(outcome.project); return outcome;}} onManualSelect={onOpenReference ? () => onOpenReference() : undefined} />
+        {advisorMode ? <><AssistantPanel advisorMode workflowBusy={busy} hasStoryFacts={hasStoryFacts} key={workspace} workspace={workspace} project={project} setProject={setProject} currentStage={currentStage} nextStage={stages[stageIndex + 1]} candidateSet={candidateSet} impactInventory={outlineInventory} onAdoptAdvisor={entry => {const outcome=adoptNovelAdvisor(project, entry, FALLBACK_DEFAULTS, stages, hasStoryFacts); if(outcome.success) setProject(outcome.project); return outcome;}} onManualSelect={onOpenReference ? () => {console.log('[FlowView-advisorMode] onManualSelect 被调用，准备跳转'); onOpenReference();} : undefined} setPendingQuickAdoptJump={setPendingQuickAdoptJump} />
           <details className="mt-6 rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">已有要求 / 手动设置</summary><p className="mt-3 text-xs leading-6 text-muted-foreground">有明确要求时可以填写；没有要求就先与 AI 讨论。你手动确定的内容会持续保留。</p>{manualControls}</details>
           <button disabled={busy} onClick={skipPreparation} className="mt-5 text-sm text-muted-foreground hover:text-primary disabled:opacity-50">已有明确创意，跳过顾问</button>
         </> : manualControls}
@@ -1243,6 +1372,16 @@ function FlowView({ chapterOpening = false, nextChapterNumber, onContinueChapter
 function WorkflowField({ field, value, disabled, onChange }: { field: WorkflowVariable; value: string; disabled: boolean; onChange: (value: string) => void }) { const options = field.options?.length ? field.options : field.key === "writer_type" ? [{ name: "单写手", value: "single" }, { name: "多写手", value: "muti" }] : field.key === "narrative_pov" ? [{ name: "第一人称（我）", value: "first_person" }, { name: "第三人称（他 / 她）", value: "third_person" }] : []; return <label className="block"><span className="mb-2 flex items-center gap-2 text-sm font-medium">{field.name || LABELS[field.key] || field.key}{field.required && <span className="text-[11px] text-amber-400">必填</span>}</span>{options.length ? <select disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} className={inputClass}>{options.map((option) => <option key={option.value} value={option.value}>{option.name}</option>)}</select> : field.type === "textarea" || field.key.includes("intent") || field.key === "premise" ? <textarea disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} rows={4} className={inputClass} /> : <input disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} className={inputClass} />}<span className="mt-1 block text-xs text-muted-foreground">{field.description || (field.required ? "这是工作流定义中的必填参数。" : "可留空，工作流会使用默认值。")}</span></label>; }
 
 function CandidateChooser({candidateSet, selected, project, adoptedStyles, adoptedConflicts, adoptedReferences, adoptedIds, disabled, setProject}: {candidateSet: CandidateSet | null; selected:string[]; project:Project; adoptedStyles:string[]; adoptedConflicts:string[]; adoptedReferences:Array<{choice_id:string;title:string;guidance:string}>; adoptedIds:string[]; disabled:boolean; setProject:React.Dispatch<React.SetStateAction<Project>>}) {
+  // 调试：打印 selected 状态
+  console.log('[CandidateChooser] ========== 渲染状态 ==========');
+  console.log('[CandidateChooser] selected (应该勾选的ID):', selected);
+  console.log('[CandidateChooser] adoptedIds (已确认的):', adoptedIds);
+  console.log('[CandidateChooser] candidateSet.candidates 数量:', candidateSet?.candidates.length);
+  if (candidateSet?.candidates) {
+    console.log('[CandidateChooser] 候选ID列表:', candidateSet.candidates.map(c => c.candidate_id));
+  }
+  console.log('[CandidateChooser] ==========================================');
+
   const [tab,setTab] = useState<"writing"|"style"|"conflict">("writing");
   const [onlyAdopted,setOnlyAdopted] = useState(false);
   if (!candidateSet) return <p role="status" className="mt-6 text-sm leading-7 text-muted-foreground">暂无参考内容。可以去写法库选择已有结果，也可以直接进入创作流程。</p>;
@@ -1251,7 +1390,8 @@ function CandidateChooser({candidateSet, selected, project, adoptedStyles, adopt
   const locked=tab==="style"?adoptedStyles:adoptedConflicts;
   const checked=tab==="style"?project.selectedStyles || []:project.selectedConflicts || [];
   const adoptedTotal=adoptedIds.length+adoptedStyles.length+adoptedConflicts.length;
-  return <div className="mt-6 space-y-4"><p role="status" className="rounded-xl border border-primary/25 bg-primary/5 p-4 text-sm leading-7">已采用：风格 {adoptedStyles.length} 条 · 写法 {adoptedIds.length} 条 · 冲突 {adoptedConflicts.length} 条。已有内容持续保留，新内容经确认后生效。适配说明须使用本书的题材、视角与人物，不照搬参考作品事件。</p>
+  const selectedTotal=selected.length+(project.selectedStyles||[]).length+(project.selectedConflicts||[]).length;
+  return <div className="mt-6 space-y-4"><p role="status" className="rounded-xl border border-primary/25 bg-primary/5 p-4 text-sm leading-7">已采用：风格 {adoptedStyles.length} 条 · 写法 {adoptedIds.length} 条 · 冲突 {adoptedConflicts.length} 条{selectedTotal>0?` | 已勾选待确认：风格 ${(project.selectedStyles||[]).length} 条 · 写法 ${selected.length} 条 · 冲突 ${(project.selectedConflicts||[]).length} 条`:''}.{selectedTotal>0?'点击下方「确认并应用」后生效。':''}已有内容持续保留，新内容经确认后生效。适配说明须使用本书的题材、视角与人物，不照搬参考作品事件。</p>
     <div className="flex flex-wrap items-center gap-3"><div role="tablist" aria-label="本书参考分类">{([['writing',`写法 · ${candidateSet.candidates.length}`],['style',`风格 · ${styles.length}`],['conflict',`冲突 · ${conflicts.length}`]] as const).map(([id,label])=><button key={id} role="tab" aria-selected={tab===id} onClick={()=>setTab(id)} className={`border-b-2 px-3 py-2 text-sm ${tab===id?'border-primary text-primary':'border-transparent text-muted-foreground'}`}>{label}</button>)}</div><label className="text-xs text-muted-foreground"><input type="checkbox" checked={onlyAdopted} onChange={e=>setOnlyAdopted(e.target.checked)} /> 只看已采用（{adoptedTotal} 项）</label></div>
     {tab==="writing" ? candidateSet.candidates.filter(item=>!onlyAdopted || adoptedIds.includes(item.candidate_id)).map(candidate=><details key={candidate.candidate_id} className="rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">{referenceTitle(candidate.mechanism)}<span className={`ml-2 text-xs ${adoptedIds.includes(candidate.candidate_id)?'text-emerald-300':'text-muted-foreground'}`}>{adoptedIds.includes(candidate.candidate_id)?'已采用 · 持续保留':selected.includes(candidate.candidate_id)?'已勾选 · 待确认':'未采用'}</span></summary><label className="mt-4 flex gap-3 text-sm leading-7"><input type="checkbox" checked={adoptedIds.includes(candidate.candidate_id)||selected.includes(candidate.candidate_id)} disabled={disabled||adoptedIds.includes(candidate.candidate_id)} onChange={e=>setProject(current=>({...current,selected:toggleWriting(current.selected,adoptedIds,candidate.candidate_id,e.target.checked)}))}/><span>{candidate.mechanism}</span></label><p className="mt-3 text-sm leading-7">{candidate.transfer_guidance}</p><p className="mt-3 text-sm leading-7 text-muted-foreground">{candidate.adaptation_guidance}</p><p className="mt-3 text-sm leading-7 text-amber-300">{(candidate.constraints||[]).join('；')}</p></details>) : choices.filter(item=>!onlyAdopted||locked.includes(item.choice_id)).map(choice=><details key={choice.choice_id} className="rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">{referenceTitle(choice.title)}<span className={`ml-2 text-xs ${locked.includes(choice.choice_id)?'text-emerald-300':'text-muted-foreground'}`}>{locked.includes(choice.choice_id)?'已采用 · 持续保留':checked.includes(choice.choice_id)?'已勾选 · 待确认':choice.requires_adaptation?'需适配 · 未采用':'未采用'}</span></summary><div className="mt-5"><NovelReferenceChoice choice={choice}/></div><label className="mt-5 flex gap-3 text-sm"><input type="checkbox" checked={locked.includes(choice.choice_id)||checked.includes(choice.choice_id)} disabled={disabled||locked.includes(choice.choice_id)} onChange={e=>setProject(current=>{const key=tab==='style'?'selectedStyles':'selectedConflicts';return {...current,[key]:toggleWriting(current[key]||[],locked,choice.choice_id,e.target.checked)};})}/>用于本书</label>{locked.includes(choice.choice_id)?<div className="mt-4 rounded-lg bg-emerald-400/5 p-3 text-sm leading-7"><p className="font-medium text-emerald-300">本书已确认的适配</p><p className="mt-2 whitespace-pre-wrap">{adoptedReferences.find(item=>item.choice_id===choice.choice_id)?.guidance}</p></div>:<label className="mt-4 block text-sm"><span className="mb-2 block">本书适配说明{choice.requires_adaptation?'（采用前必填）':'（可以调整）'}</span><textarea aria-label={`本书适配：${referenceTitle(choice.title)}`} rows={3} disabled={disabled} value={project.referenceAdaptations?.[choice.choice_id]??(choice.requires_adaptation?'':choice.transfer_guidance)} onChange={e=>setProject(current=>({...current,referenceAdaptations:{...current.referenceAdaptations,[choice.choice_id]:e.target.value}}))} placeholder="可先运行写法兼容顾问，参考建议填写：本书怎样使用、怎样埋伏笔、怎样回收；无需复制原作情节。" className={inputClass}/></label>}</details>)}
     {(tab==='writing'?candidateSet.candidates:choices).length===0 && <p className="text-sm leading-7 text-muted-foreground">暂无该类分析，可以保持原创设定。</p>}
@@ -1269,7 +1409,7 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   return <div className="mt-5 rounded-xl border border-primary/25 bg-primary/5 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">写法兼容建议</p><span className="rounded-full bg-secondary px-2 py-1 text-xs">{report.status === "skipped" ? "已跳过" : report.status === "pending" ? "等待基线" : "已分析"}</span></div>{report.summary && <p className="mt-3 text-sm leading-7">{report.summary}</p>}{(report.global_risks || []).map((risk, index) => <p key={index} className="mt-3 text-sm leading-7 text-amber-300">全局风险：{risk}</p>)}<div className="mt-3 space-y-2">{(report.recommendations || []).map((item, index) => <details key={`${item.candidate_id || "candidate"}-${index}`} className="rounded-lg border border-border bg-background/50 p-3"><summary className="cursor-pointer text-sm"><span className="font-medium">{referenceTitle(candidateSet?.candidates.find(candidate => candidate.candidate_id === item.candidate_id)?.mechanism || [...(candidateSet?.style_choices || []), ...(candidateSet?.conflict_choices || [])].find(choice => choice.choice_id === item.candidate_id)?.title || `参考建议 ${index + 1}`)}</span><span className="ml-2 text-primary">{decisionLabels[item.decision || ""] || item.decision || "待判断"}</span>{typeof item.score === "number" && <span className="ml-2 text-xs text-muted-foreground">{item.score}/100</span>}</summary>{(item.reasons || []).map((reason, i) => <p key={i} className="mt-3 text-sm leading-7 text-muted-foreground">原因：{reason}</p>)}{(item.conflicts || []).map((conflict, i) => <p key={i} className="mt-3 text-sm leading-7 text-amber-300">{archiveScalar(conflict.severity || "提示", "severity")} · {conflict.field ? archiveLabel(conflict.field.split(".").pop() || conflict.field) : "兼容性"}：{conflict.message}</p>)}{(item.adaptation_plan || []).map((plan, i) => <p key={i} className="mt-3 text-sm leading-7">适配：{plan}</p>)}{(item.questions || []).map((question, i) => <p key={i} className="mt-3 text-sm leading-7 text-primary">需要确认：{question}</p>)}</details>)}</div>{applicable.length > 0 && <div className="mt-4"><button disabled={copied} onClick={fill} className="rounded-lg border border-primary/30 px-4 py-2 text-sm text-primary disabled:opacity-50">{copied ? "已填入适配草稿" : "将风格与冲突建议填入适配草稿"}</button><p role="status" className="mt-2 text-xs leading-6 text-muted-foreground">保留你已填写的说明；不会自动勾选或采用。到「选择与确认」检查后再确认。</p></div>}{report.next_step && <p className="mt-3 text-xs text-muted-foreground">下一步：{report.next_step}</p>}</div>;
 }
 
- function AssistantPanel({ advisorMode = false, workflowBusy = false, onAdoptAdvisor, onManualSelect, hasStoryFacts = false, moduleOnly = false, workspace, project, setProject, currentStage, nextStage, definition, candidateSet, impactInventory }: { advisorMode?: boolean; workflowBusy?: boolean; onAdoptAdvisor?: (entry:NovelAssistantEntry)=>{success:boolean;message:string}; onManualSelect?: ()=>void; hasStoryFacts?: boolean; moduleOnly?: boolean; workspace: string; project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; currentStage: StageMeta; nextStage?: StageMeta; definition?: WorkflowDefinition; candidateSet: CandidateSet | null; impactInventory: ReturnType<typeof outlineImpactInventory> }) {
+ function AssistantPanel({ advisorMode = false, workflowBusy = false, onAdoptAdvisor, onManualSelect, setPendingQuickAdoptJump, hasStoryFacts = false, moduleOnly = false, workspace, project, setProject, currentStage, nextStage, definition, candidateSet, impactInventory }: { advisorMode?: boolean; workflowBusy?: boolean; onAdoptAdvisor?: (entry:NovelAssistantEntry)=>{success:boolean;message:string}; onManualSelect?: ()=>void; setPendingQuickAdoptJump?: React.Dispatch<React.SetStateAction<boolean>>; hasStoryFacts?: boolean; moduleOnly?: boolean; workspace: string; project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; currentStage: StageMeta; nextStage?: StageMeta; definition?: WorkflowDefinition; candidateSet: CandidateSet | null; impactInventory: ReturnType<typeof outlineImpactInventory> }) {
   const cacheKey = storageKey(workspace) + ":assistant-history";
   const [entries, setEntries] = useState<NovelAssistantEntry[]>(() => {
     try { const cached = JSON.parse(localStorage.getItem(cacheKey) || "[]"); return Array.isArray(cached) ? cached : []; } catch { return []; }
@@ -1391,64 +1531,364 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   };
 
   const handleQuickAdopt = async (entry: NovelAssistantEntry): Promise<{success: boolean; message: string}> => {
+    console.log('[handleQuickAdopt] === 开始快速采用流程 ===');
     try {
       // 1. 获取写法库列表
+      console.log('[handleQuickAdopt] 步骤1: 获取写法库列表');
       const libraryList = await listWritingLibrary();
+      console.log('[handleQuickAdopt] 写法库列表:', libraryList);
       if (!libraryList.items || libraryList.items.length === 0) {
         return { success: false, message: "写法库为空，无法快速采用。" };
       }
 
       // 2. 默认引用第一个写法库（后续可优化为智能匹配）
       const libraryId = libraryList.items[0].id;
+      console.log('[handleQuickAdopt] 步骤2: 选择写法库 ID:', libraryId, '名称:', libraryList.items[0].name);
 
-      // 3. 调用引用接口，获取候选写法
+      // 3. 先引用写法库，触发后端生成候选列表
+      console.log('[handleQuickAdopt] 步骤3: 引用写法库到本书');
       const attachResult = await attachWritingLibrary({
         workflow_id: workflowId("build"),
         workspace,
         library_id: libraryId,
         refresh: false
       });
+      console.log('[handleQuickAdopt] 引用成功:', attachResult);
 
-      // 4. 提取推荐的写法机制ID
+      // 4. 获取完整的候选列表（使用和 CandidateChooser 相同的 API）
+      console.log('[handleQuickAdopt] 步骤4: 获取候选列表（和页面显示的列表相同）');
+      const candidateSet = await getNovelReferenceCandidates(workflowId("build"), workspace);
+      console.log('[handleQuickAdopt] 候选列表:', candidateSet);
+
+      const candidatesList = candidateSet.candidates || [];
+      console.log('[handleQuickAdopt] 候选数量:', candidatesList.length);
+
+      // 5. 提取推荐的写法机制名称
       const recommendedMechanisms = entry.advisor_sections?.mechanism_recommendations?.adopted_from_library || [];
       const mechanismNames = recommendedMechanisms.map(m => m.mechanism);
+      console.log('[handleQuickAdopt] 步骤5: 推荐的机制名称:', mechanismNames);
+      console.log('[handleQuickAdopt] 推荐详情:', recommendedMechanisms);
 
-      // 5. 从候选写法中匹配推荐的机制（通过名称模糊匹配）
+      // 6. 从候选写法中匹配推荐的机制（智能匹配算法）
       const candidateIds: string[] = [];
-      if (attachResult.candidates && Array.isArray(attachResult.candidates)) {
-        for (const candidate of attachResult.candidates) {
+      console.log('[handleQuickAdopt] 步骤6: 开始智能匹配候选写法');
+      console.log('[handleQuickAdopt] 候选总数:', candidatesList.length);
+
+      // 提取关键词的辅助函数
+      const extractKeywords = (text: string): string[] => {
+        // 去除常见后缀和停用词
+        const cleaned = text
+          .replace(/[法方式技巧模式策略手法机制]$/g, '')  // 去掉常见后缀
+          .replace(/[的地得之于在]$/g, '');  // 去掉常见助词
+
+        // 按照常见分隔符分词
+        const words = cleaned.split(/[、，。；：]/g).filter(w => w.length > 0);
+
+        // 返回所有关键词（包括原始词和清理后的词）
+        return [text, cleaned, ...words];
+      };
+
+      // 同义词映射
+      const synonyms: Record<string, string[]> = {
+        '两难': ['困境', '选择', '抉择', '两难'],
+        '困境': ['两难', '选择', '抉择', '困境'],
+        '抉择': ['两难', '困境', '选择', '抉择'],
+        '选择': ['两难', '困境', '抉择', '选择'],
+        '冲突': ['矛盾', '对抗', '争端', '冲突'],
+        '矛盾': ['冲突', '对抗', '争端', '矛盾'],
+      };
+
+      if (Array.isArray(candidatesList) && candidatesList.length > 0) {
+        for (const candidate of candidatesList) {
+          console.log('[handleQuickAdopt] --- 检查候选 ---');
+          console.log('[handleQuickAdopt] ID:', candidate.candidate_id);
+          console.log('[handleQuickAdopt] mechanism:', candidate.mechanism);
+          console.log('[handleQuickAdopt] title:', candidate.title);
+          console.log('[handleQuickAdopt] description:', typeof candidate.description === 'string' ? candidate.description.substring(0, 100) : candidate.description);
+
           // 检查候选写法是否匹配任何推荐的机制
-          const matches = mechanismNames.some(name =>
-            candidate.mechanism.includes(name) || name.includes(candidate.mechanism)
-          );
+          const candidateMechanism = String(candidate.mechanism || '').toLowerCase().trim();
+          const candidateTitle = String(candidate.title || '').toLowerCase().trim();
+          const candidateDescription = String(candidate.description || '').toLowerCase().trim();
+
+          // 智能匹配：机制名、标题、描述
+          const matches = mechanismNames.some(name => {
+            const lowerName = name.toLowerCase().trim();
+            console.log('[handleQuickAdopt]   对比推荐:', name);
+
+            // 1. 精确完整匹配
+            if (candidateMechanism === lowerName || candidateTitle === lowerName) {
+              console.log('[handleQuickAdopt]   ✓ 精确匹配');
+              return true;
+            }
+
+            // 2. 包含匹配（双向）
+            if (candidateMechanism.includes(lowerName) || lowerName.includes(candidateMechanism)) {
+              console.log('[handleQuickAdopt]   ✓ 机制名包含匹配');
+              return true;
+            }
+            if (candidateTitle && (candidateTitle.includes(lowerName) || lowerName.includes(candidateTitle))) {
+              console.log('[handleQuickAdopt]   ✓ 标题包含匹配');
+              return true;
+            }
+
+            // 3. 关键词匹配
+            const nameKeywords = extractKeywords(lowerName);
+            const mechanismKeywords = extractKeywords(candidateMechanism);
+            const titleKeywords = extractKeywords(candidateTitle);
+
+            for (const nk of nameKeywords) {
+              if (nk.length < 2) continue;  // 跳过太短的词
+              for (const mk of mechanismKeywords) {
+                if (mk.length < 2) continue;
+                if (nk.includes(mk) || mk.includes(nk)) {
+                  console.log('[handleQuickAdopt]   ✓ 关键词匹配 (mechanism):', nk, '←→', mk);
+                  return true;
+                }
+              }
+              for (const tk of titleKeywords) {
+                if (tk.length < 2) continue;
+                if (nk.includes(tk) || tk.includes(nk)) {
+                  console.log('[handleQuickAdopt]   ✓ 关键词匹配 (title):', nk, '←→', tk);
+                  return true;
+                }
+              }
+            }
+
+            // 4. 同义词匹配
+            for (const [key, values] of Object.entries(synonyms)) {
+              if (lowerName.includes(key)) {
+                for (const synonym of values) {
+                  if (candidateMechanism.includes(synonym) || candidateTitle.includes(synonym)) {
+                    console.log('[handleQuickAdopt]   ✓ 同义词匹配:', key, '→', synonym);
+                    return true;
+                  }
+                }
+              }
+            }
+
+            // 5. 描述中的深度匹配（仅当前面都不匹配时）
+            if (candidateDescription.length > 20) {
+              const descKeywords = extractKeywords(candidateDescription);
+              for (const nk of nameKeywords) {
+                if (nk.length < 2) continue;
+                for (const dk of descKeywords) {
+                  if (dk.length < 2) continue;
+                  if (nk.includes(dk) || dk.includes(nk)) {
+                    console.log('[handleQuickAdopt]   ✓ 描述关键词匹配:', nk, '←→', dk);
+                    return true;
+                  }
+                }
+              }
+            }
+
+            console.log('[handleQuickAdopt]   ✗ 无匹配');
+            return false;
+          });
+
           if (matches) {
-            candidateIds.push(candidate.candidate_id);
+            console.log('[handleQuickAdopt] ✅ 最终匹配成功 → ID:', candidate.candidate_id);
+            candidateIds.push(String(candidate.candidate_id));
+          } else {
+            console.log('[handleQuickAdopt] ❌ 最终未匹配');
+          }
+        }
+      } else {
+        console.warn('[handleQuickAdopt] ⚠️ 候选列表为空或格式错误');
+      }
+      console.log('[handleQuickAdopt] ===================');
+      console.log('[handleQuickAdopt] 匹配到的写法ID列表:', candidateIds);
+      console.log('[handleQuickAdopt] 匹配成功数量:', candidateIds.length);
+
+      // 7. 匹配风格选择 (style_choices)
+      console.log('[handleQuickAdopt] 步骤7: 开始匹配风格选择');
+      const styleIds: string[] = [];
+      const styleRecommendations = entry.advisor_sections?.style_recommendations?.adopted_styles || [];
+      const styleNames = styleRecommendations.map(s => s.style);
+      console.log('[handleQuickAdopt] 推荐的风格:', styleNames);
+
+      const styleChoices = candidateSet?.style_choices || [];
+      console.log('[handleQuickAdopt] 可选风格数量:', styleChoices.length);
+
+      if (Array.isArray(styleChoices) && styleChoices.length > 0 && styleNames.length > 0) {
+        for (const choice of styleChoices) {
+          const choiceTitle = String(choice.title || '').toLowerCase().trim();
+          const choiceDescription = String(choice.description || '').toLowerCase().trim();
+
+          const matches = styleNames.some(name => {
+            const lowerName = name.toLowerCase().trim();
+            // 简化匹配：标题或描述包含即可
+            return choiceTitle.includes(lowerName) || lowerName.includes(choiceTitle) ||
+                   choiceDescription.includes(lowerName);
+          });
+
+          if (matches) {
+            console.log('[handleQuickAdopt] ✅ 匹配到风格:', choice.title, '→ ID:', choice.choice_id);
+            styleIds.push(String(choice.choice_id));
           }
         }
       }
+      console.log('[handleQuickAdopt] 匹配到的风格ID列表:', styleIds);
 
-      // 6. 更新项目状态：引用写法库 + 选中推荐的写法
-      setProject(current => ({
-        ...current,
-        writingMode: "reuse",
-        libraryRefs: [...new Set([...current.libraryRefs, libraryId])],
-        selected: [...new Set([...current.selected, ...candidateIds])],
-      }));
+      // 8. 匹配冲突模式 (conflict_choices)
+      console.log('[handleQuickAdopt] 步骤8: 开始匹配冲突模式');
+      const conflictIds: string[] = [];
+      const conflictRecommendations = entry.advisor_sections?.conflict_recommendations?.adopted_conflicts || [];
+      const conflictNames = conflictRecommendations.map(c => c.conflict);
+      console.log('[handleQuickAdopt] 推荐的冲突:', conflictNames);
 
-      // 7. 采用顾问建议的配置
-      const adoptResult = onAdoptAdvisor?.(entry);
-      if (!adoptResult?.success) {
-        return { success: false, message: "引用写法库成功，但采用配置失败。请手动完成后续步骤。" };
+      const conflictChoices = candidateSet?.conflict_choices || [];
+      console.log('[handleQuickAdopt] 可选冲突数量:', conflictChoices.length);
+
+      if (Array.isArray(conflictChoices) && conflictChoices.length > 0 && conflictNames.length > 0) {
+        for (const choice of conflictChoices) {
+          const choiceTitle = String(choice.title || '').toLowerCase().trim();
+          const choiceDescription = String(choice.description || '').toLowerCase().trim();
+
+          const matches = conflictNames.some(name => {
+            const lowerName = name.toLowerCase().trim();
+            return choiceTitle.includes(lowerName) || lowerName.includes(choiceTitle) ||
+                   choiceDescription.includes(lowerName);
+          });
+
+          if (matches) {
+            console.log('[handleQuickAdopt] ✅ 匹配到冲突:', choice.title, '→ ID:', choice.choice_id);
+            conflictIds.push(String(choice.choice_id));
+          }
+        }
+      }
+      console.log('[handleQuickAdopt] 匹配到的冲突ID列表:', conflictIds);
+
+      // 9. 更新项目状态：引用写法库 + 选中推荐的写法、风格、冲突
+      console.log('[handleQuickAdopt] 步骤9: 更新项目状态（三类内容）');
+      console.log('[handleQuickAdopt] 当前 project.selected:', project.selected);
+      console.log('[handleQuickAdopt] 当前 project.selectedStyles:', project.selectedStyles);
+      console.log('[handleQuickAdopt] 当前 project.selectedConflicts:', project.selectedConflicts);
+      console.log('[handleQuickAdopt] 当前 project.libraryRefs:', project.libraryRefs);
+
+      const newSelected = [...new Set([...project.selected, ...candidateIds])];
+      const newSelectedStyles = [...new Set([...(project.selectedStyles || []), ...styleIds])];
+      const newSelectedConflicts = [...new Set([...(project.selectedConflicts || []), ...conflictIds])];
+      const newLibraryRefs = [...new Set([...project.libraryRefs, libraryId])];
+
+      console.log('[handleQuickAdopt] 新的 selected:', newSelected);
+      console.log('[handleQuickAdopt] 新的 selectedStyles:', newSelectedStyles);
+      console.log('[handleQuickAdopt] 新的 selectedConflicts:', newSelectedConflicts);
+      console.log('[handleQuickAdopt] 新的 libraryRefs:', newLibraryRefs);
+
+      // 9a. 先更新写法选择状态
+      setProject(current => {
+        const updated = {
+          ...current,
+          writingMode: "reuse" as const,
+          libraryRefs: newLibraryRefs,
+          selected: newSelected,
+          selectedStyles: newSelectedStyles,
+          selectedConflicts: newSelectedConflicts,
+          persisted: true,  // ← 关键：触发 localStorage 持久化
+        };
+        console.log('[handleQuickAdopt] setProject 调用（三类选择），更新后的状态:', updated);
+        console.log('[handleQuickAdopt] 关键字段检查:');
+        console.log('  - writingMode:', updated.writingMode);
+        console.log('  - libraryRefs:', updated.libraryRefs);
+        console.log('  - selected:', updated.selected);
+        console.log('  - selectedStyles:', updated.selectedStyles);
+        console.log('  - selectedConflicts:', updated.selectedConflicts);
+        console.log('  - persisted:', updated.persisted);
+
+        // 立即手动保存到 localStorage（不等待 useEffect）
+        try {
+          const storageKey = `novel-project-${workspace}`;
+          localStorage.setItem(storageKey, JSON.stringify(updated));
+          console.log('[handleQuickAdopt] ✅ 已立即保存到 localStorage:', storageKey);
+        } catch (error) {
+          console.error('[handleQuickAdopt] ❌ localStorage 保存失败:', error);
+        }
+
+        return updated;
+      });
+
+      // 9b. 立即打印最终状态供调试
+      console.log('[handleQuickAdopt] ========== 最终状态 ==========');
+      console.log('[handleQuickAdopt] candidateIds (写法):', candidateIds);
+      console.log('[handleQuickAdopt] styleIds (风格):', styleIds);
+      console.log('[handleQuickAdopt] conflictIds (冲突):', conflictIds);
+      console.log('[handleQuickAdopt] libraryId:', libraryId);
+      console.log('[handleQuickAdopt] newSelected:', newSelected);
+      console.log('[handleQuickAdopt] newSelectedStyles:', newSelectedStyles);
+      console.log('[handleQuickAdopt] newSelectedConflicts:', newSelectedConflicts);
+      console.log('[handleQuickAdopt] newLibraryRefs:', newLibraryRefs);
+      console.log('[handleQuickAdopt] =====================================');
+
+      // 9c. 延迟验证状态是否真的保存了
+      setTimeout(() => {
+        try {
+          const storageKey = `novel-project-${workspace}`;
+          const savedData = localStorage.getItem(storageKey);
+          if (savedData) {
+            const savedProject = JSON.parse(savedData);
+            console.log('[handleQuickAdopt] ✅ localStorage 验证:');
+            console.log('  - 保存的 selected:', savedProject.selected);
+            console.log('  - 保存的 selectedStyles:', savedProject.selectedStyles);
+            console.log('  - 保存的 selectedConflicts:', savedProject.selectedConflicts);
+            console.log('  - 保存的 libraryRefs:', savedProject.libraryRefs);
+            console.log('  - 保存的 persisted:', savedProject.persisted);
+            console.log('  - 保存的 writingMode:', savedProject.writingMode);
+          } else {
+            console.error('[handleQuickAdopt] ❌ localStorage 中找不到项目数据！');
+          }
+        } catch (error) {
+          console.error('[handleQuickAdopt] ❌ localStorage 验证失败:', error);
+        }
+      }, 250);
+
+      // 7. 采用顾问建议的配置（可选，失败不影响写法采用）
+      console.log('[handleQuickAdopt] 步骤7: 采用顾问建议配置');
+      let configAdopted = false;
+      try {
+        if (onAdoptAdvisor) {
+          const adoptResult = onAdoptAdvisor(entry);
+          console.log('[handleQuickAdopt] onAdoptAdvisor 返回:', adoptResult);
+          configAdopted = adoptResult?.success || false;
+
+          // 如果配置采用成功，需要再次触发状态保存
+          if (configAdopted) {
+            setTimeout(() => {
+              setProject(current => ({ ...current, persisted: true }));
+            }, 50);
+          }
+        } else {
+          console.log('[handleQuickAdopt] onAdoptAdvisor 不存在，跳过配置采用');
+        }
+      } catch (error) {
+        console.error('[handleQuickAdopt] 采用配置时出错（不影响写法采用）:', error);
       }
 
-      // 8. 自动跳转到"本书参考写法"页面（兼容顾问阶段）
-      onManualSelect?.(); // 触发跳转回调
+      // 8. 标记需要跳转到"本书参考写法"页面（由 useEffect 监听后执行）
+      console.log('[handleQuickAdopt] 步骤8: 设置跳转标记');
+      console.log('[handleQuickAdopt] onManualSelect 存在:', !!onManualSelect);
+
+      if (onManualSelect && setPendingQuickAdoptJump) {
+        // 不直接跳转，而是设置标记，让 useEffect 在状态更新完成后自动跳转
+        console.log('[handleQuickAdopt] 设置 pendingQuickAdoptJump = true，等待 useEffect 处理跳转');
+        setPendingQuickAdoptJump(true);
+      } else {
+        console.log('[handleQuickAdopt] ⚠️ onManualSelect 不存在，无法自动跳转。');
+      }
+
+      console.log('[handleQuickAdopt] === 快速采用流程完成 ===');
+
+      const totalMatched = candidateIds.length + styleIds.length + conflictIds.length;
+      const successMessage = totalMatched > 0
+        ? `✅ 已快速采用！引用了写法库「${libraryList.items[0].name}」，已选中 ${candidateIds.length} 条写法、${styleIds.length} 条风格、${conflictIds.length} 条冲突。${onManualSelect ? '正在跳转...' : '请点击"本书参考写法"查看。'}${configAdopted ? '' : '\n\n💡 提示：配置建议未自动采用，你可以在结果下方手动点击"采用方案"按钮。'}`
+        : `⚠️ 已引用写法库「${libraryList.items[0].name}」，但未找到匹配的推荐内容。\n\n可能原因：\n1. AI 推荐的名称与写法库中的名称不匹配\n2. 写法库中暂无相关内容\n\n请手动在"本书参考写法"中选择合适的写法、风格和冲突。`;
 
       return {
-        success: true,
-        message: `✅ 已快速采用！引用了写法库「${libraryList.items[0].name}」，已选中 ${candidateIds.length} 条推荐写法。\n\n💡 下一步：点击"让 AI 检查适配"运行兼容检查，审查建议后点击"将建议填入适配草稿"，然后切换到"选择与确认"完成采用。`
+        success: true,  // 只要引用了写法库就算成功
+        message: successMessage
       };
     } catch (error) {
+      console.error('[handleQuickAdopt] ❌ 快速采用失败:', error);
       return {
         success: false,
         message: `快速采用失败：${error instanceof Error ? error.message : String(error)}`
@@ -1477,5 +1917,5 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
 }
 
 export default function NovelWorkbenchPage() {
-  return <NovelWorkbenchProvider><NovelWorkbenchSurface><NovelWorkbenchContent /></NovelWorkbenchSurface></NovelWorkbenchProvider>;
+  return <NovelResourceGate><NovelWorkbenchProvider><NovelWorkbenchSurface><NovelWorkbenchContent /></NovelWorkbenchSurface></NovelWorkbenchProvider></NovelResourceGate>;
 }

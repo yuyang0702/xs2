@@ -343,6 +343,11 @@ async def create_task(workflow_id: str, request: Request,
     返回 task_id，前端随后调用 run 接口启动。
     如果 workflow 没有定义变量，则 parameter_values 可留空。"""
     mgr = _ensure_http_mutation_allowed(request, workflow_id)
+    automation = getattr(request.app.state, "novel_automation", None)
+    if automation:
+        root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=body.workspace_override)
+        if automation.has_active(root):
+            raise HTTPException(409, "后台自动创作正在推进，请先暂停后手动启动任务")
     result = mgr.create_task(workflow_id, from_node_id=body.from_node_id,
                               parameter_values=body.parameter_values,
                               node_model_overrides=body.node_model_overrides,

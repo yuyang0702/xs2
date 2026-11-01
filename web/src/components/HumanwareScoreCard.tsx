@@ -31,11 +31,18 @@ interface HumanwareScore {
 }
 
 interface HumanwareScoreCardProps {
-  score: HumanwareScore;
+  score: HumanwareScore | { supported: false; message?: string } | null;
   className?: string;
 }
 
 export default function HumanwareScoreCard({ score, className = '' }: HumanwareScoreCardProps) {
+  if (!score || 'supported' in score) {
+    return <div className={`rounded-2xl border border-border bg-card p-5 ${className}`}>
+      <h3 className="text-lg font-semibold">人味评估</h3>
+      <p className="mt-2 text-sm text-muted-foreground">{score?.message || '当前插件未提供独立人味评分，请查看模拟读者工作流的评估报告。'}</p>
+    </div>;
+  }
+
   const getScoreColor = (scoreValue: number) => {
     if (scoreValue >= 90) return 'text-green-600';
     if (scoreValue >= 80) return 'text-blue-600';

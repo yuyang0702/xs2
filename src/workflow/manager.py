@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import shutil
+from threading import RLock
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,7 @@ from .execution_routing import WorkflowExecutionRoutingMixin
 from .main_task_creation import WorkflowMainTaskCreationMixin
 from .task_queries import TaskQueryMixin
 from .task_persistence import write_task_state_file
+from .model_preferences import apply_model_preferences, read_model_preferences, write_model_preferences
 from .task_overrides import (
     TaskOverrideValidationError,
     apply_node_model_overrides,
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
     from src.agent.session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
+_model_preferences_lock = RLock()
 
 
 class WorkflowManager(
@@ -245,11 +248,50 @@ class WorkflowManager(
         if not self.is_workflow_owner_enabled(workflow_id):
             return None
         try:
-            wf_def = WorkflowDef.from_dict(json.loads(def_file.read_text(encoding='utf-8')))
-            return {"definition": wf_def.to_dict()}
+            raw = json.loads(def_file.read_text(encoding='utf-8'))
+            # Read-only normalization must not invent a different digest on each read.
+            raw.setdefault("created_at", "")
+            raw.setdefault("updated_at", "")
+            wf_def = WorkflowDef.from_dict(raw)
+            definition = apply_model_preferences(wf_def.to_dict(), read_model_preferences(wf_dir))
+            return {"definition": definition}
         except Exception:
             logger.exception(f"加载工作流失败: {workflow_id}")
             return None
+
+    def get_workflow_owner(self, workflow_id: str) -> str | None:
+        """Resolve ownership independently of a user's installed resource prefix."""
+        try:
+            marker = self._resolve_wf_dir(workflow_id) / ".extension.json"
+            if not marker.is_file():
+                return None
+            value = json.loads(marker.read_text(encoding="utf-8")).get("owner")
+            return value if isinstance(value, str) else None
+        except (ValueError, OSError):
+            return None
+
+    def get_workflow_model_overrides(self, workflow_id: str) -> dict[str, str]:
+        return read_model_preferences(self._resolve_wf_dir(workflow_id))
+
+    def save_workflow_model_overrides(
+        self, workflow_id: str, choices: dict[str, str], *, expected_definition: dict | None = None,
+    ) -> dict | None:
+        """Persist node preferences without changing templates or existing Tasks."""
+        with _model_preferences_lock:
+            current = self.get_workflow(workflow_id)
+            if current is None or (expected_definition is not None and current["definition"] != expected_definition):
+                return None
+            nodes = {node["id"]: node for node in current["definition"].get("nodes", [])}
+            for key, value in choices.items():
+                node = nodes.get(key)
+                if not node or node.get("node_type", "agent") != "agent" or not isinstance(value, str):
+                    raise ValueError("Model preferences require existing agent nodes and text model IDs")
+                binding = (node.get("var_bindings") or {}).get("model_override") or {}
+                if binding.get("var_key") or "{{" in (node.get("model_override") or "") or "{{" in node.get("agent_type", ""):
+                    raise ValueError("A parameter-bound model cannot be overridden")
+            directory = self._resolve_wf_dir(workflow_id)
+            write_model_preferences(directory, {**read_model_preferences(directory), **choices})
+            return self.get_workflow(workflow_id)
 
     def get_workflow_execution_identity(self, workflow_id: str) -> dict | None:
         """Return hashes for the actual inline scripts Core would execute."""
@@ -314,6 +356,10 @@ class WorkflowManager(
 
     def update_workflow(self, workflow_id: str, data: dict) -> dict | None:
         """更新工作流定义。"""
+        with _model_preferences_lock:
+            return self._update_workflow_locked(workflow_id, data)
+
+    def _update_workflow_locked(self, workflow_id: str, data: dict) -> dict | None:
         existing = self.get_workflow(workflow_id)
         if not existing:
             return None
@@ -333,8 +379,17 @@ class WorkflowManager(
         wf_def.auto_pair_gateways()
 
         self._save_definition(wf_def)
+        # The generic workflow editor saves the effective definition. Explicit
+        # model edits there must replace an older separated preference too.
+        old_nodes = {node["id"]: node for node in existing["definition"].get("nodes", [])}
+        choices = self.get_workflow_model_overrides(workflow_id)
+        changes = {node["id"]: node.get("model_override") or "" for node in data.get("nodes", [])
+                   if node.get("node_type", "agent") == "agent" and "model_override" in node
+                   and node.get("model_override", "") != old_nodes.get(node["id"], {}).get("model_override", "")}
+        if changes and (choices or self.get_workflow_owner(workflow_id)):
+            write_model_preferences(self._resolve_wf_dir(workflow_id), {**choices, **changes})
         logger.info(f"工作流已更新: {workflow_id} v{wf_def.version}")
-        return {"definition": wf_def.to_dict()}
+        return self.get_workflow(workflow_id)
 
     def validate_workflow(self, data: dict) -> dict:
         """校验工作流定义的连线完整性（不保存）。"""

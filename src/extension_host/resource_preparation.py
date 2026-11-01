@@ -555,7 +555,8 @@ def prepare_plugin_resources(
     runtime_root.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(
-            prefix=f".{manifest.extension_id}.",
+            # The destination carries owner identity; staging needs only uniqueness.
+            prefix="p-",
             dir=runtime_root,
         )
     )

@@ -69,3 +69,16 @@ class StoryAssistantTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['error_code'],'plot_format')
             self.assertIn('无法核实',result['message'])
             self.assertFalse((root/'planning').exists())
+
+
+# Run adviser tests against the real source plugin in an isolated catalog.
+import pytest
+
+@pytest.fixture(autouse=True)
+def enabled_console_plugin(tmp_path, monkeypatch):
+    from src.web import novel_plugin
+    from src.workflow.script_library import ScriptLibraryCatalog
+    from src.extension_api.registrar import OwnedPath
+    plugin = Path(__file__).resolve().parents[2] / 'DeterminFlow-Plugins/plugins/xs2-novel-flywheel/resources/script-library'
+    catalog = ScriptLibraryCatalog(tmp_path / 'user-library', [OwnedPath('xs2-novel-flywheel', plugin)])
+    monkeypatch.setattr(novel_plugin, 'get_script_library', lambda: catalog)

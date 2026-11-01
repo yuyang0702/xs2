@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from src.web.novel_repair import repair_context, prepare_repair
 from src.web.novel_assistant import NovelAssistantJobs
+from src.web.novel_plugin import console_service
 
 
 class RepairTests(unittest.IsolatedAsyncioTestCase):
@@ -58,8 +59,8 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
                 return SimpleNamespace(content='写出送水现场，并保留承诺。')
         jobs = NovelAssistantJobs()
         with (
-            patch('src.web.novel_assistant.ANALYSIS_TIMEOUT_SECONDS', 0.001),
-            patch('src.web.novel_assistant.ADVISOR_COMPLETION_TIMEOUT_SECONDS', 1),
+            patch.object(console_service().assistant, 'ANALYSIS_TIMEOUT_SECONDS', 0.001),
+            patch.object(console_service().assistant, 'ADVISOR_COMPLETION_TIMEOUT_SECONDS', 1),
             patch('src.web.novel_assistant.create_llm', return_value=SlowModel()) as factory,
         ):
             entry = jobs.start(self.root, 'delayed-repair', {
@@ -94,3 +95,16 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
     def test_active_workflow_prevents_new_plan(self):
         d=json.loads(self.task.read_text());d['status']='running';self.task.write_text(json.dumps(d))
         with self.assertRaisesRegex(ValueError,'任务正在处理'):repair_context(self.root,'0001',self.wfs)
+
+
+# Run adviser tests against the real source plugin in an isolated catalog.
+import pytest
+
+@pytest.fixture(autouse=True)
+def enabled_console_plugin(tmp_path, monkeypatch):
+    from src.web import novel_plugin
+    from src.workflow.script_library import ScriptLibraryCatalog
+    from src.extension_api.registrar import OwnedPath
+    plugin = Path(__file__).resolve().parents[2] / 'DeterminFlow-Plugins/plugins/xs2-novel-flywheel/resources/script-library'
+    catalog = ScriptLibraryCatalog(tmp_path / 'user-library', [OwnedPath('xs2-novel-flywheel', plugin)])
+    monkeypatch.setattr(novel_plugin, 'get_script_library', lambda: catalog)

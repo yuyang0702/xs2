@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import os
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,6 +22,10 @@ def canonicalize_plugin_source(source: str) -> tuple[str, str, str]:
     raw = str(source).strip()
     if not raw:
         raise ValueError("plugin source cannot be empty")
+    # urlsplit interprets the drive letter in C:\\path as a URL scheme.
+    if os.name == "nt" and re.match(r"^[A-Za-z]:[\\/]", raw):
+        canonical = Path(raw).expanduser().resolve().as_uri()
+        return canonical, "local", canonical
     split = urlsplit(raw)
     if split.scheme == "file":
         if split.netloc or split.query or split.fragment:
