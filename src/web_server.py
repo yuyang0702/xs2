@@ -55,6 +55,7 @@ from src.roundtable.routes import router as roundtable_router
 from src.web.workflow_routes import router as workflow_router, tasks_router
 from src.web.novel_routes import router as novel_console_router
 from src.web.novel_automation_routes import router as novel_automation_router
+from src.web.novel_reference_adoption_routes import router as novel_reference_adoption_router
 from src.web.workflow_node_control_routes import router as workflow_node_control_router
 from src.web.attachment_routes import router as attachment_router
 from src.web.mention_routes import router as mention_router
@@ -120,6 +121,9 @@ async def lifespan(app: FastAPI):
 
     async def _cleanup_on_failure():
         """初始化失败时按创建顺序的逆序清理已分配资源。"""
+        adoption_jobs = getattr(app.state, "novel_reference_adoption_jobs", None)
+        if adoption_jobs:
+            await adoption_jobs.stop()
         if novel_automation:
             await novel_automation.stop()
         if workflow_executor_pool:
@@ -713,6 +717,9 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("正在关闭 Web 服务...")
+    adoption_jobs = getattr(app.state, "novel_reference_adoption_jobs", None)
+    if adoption_jobs:
+        await adoption_jobs.stop()
     if novel_automation:
         await novel_automation.stop()
     try:
@@ -858,6 +865,7 @@ def create_app(extension_manager: ExtensionManager | None = None) -> FastAPI:
     application.include_router(workflow_router)
     application.include_router(novel_console_router)
     application.include_router(novel_automation_router)
+    application.include_router(novel_reference_adoption_router)
     application.include_router(tasks_router)
     application.include_router(workflow_node_control_router)
     application.include_router(attachment_router)

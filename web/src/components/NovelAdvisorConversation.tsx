@@ -9,7 +9,7 @@ import { advisorMarkdown } from '../lib/novel-advisor';
 export default function NovelAdvisorConversation({
   question, onQuestion, onAsk, entries, busy, loading,
   feedback, now, receipts, onAdopt, onRead, workflowBusy, established, hasReference,
-  librarySize, adoptedCount, onQuickAdopt, onManualSelect
+  librarySize, adoptedCount, onQuickAdopt, onManualSelect, referenceAdoptionBusy = false, referenceAdoptionApplied = false
 }: {
   question: string;
   onQuestion: (value: string) => void;
@@ -29,45 +29,33 @@ export default function NovelAdvisorConversation({
   hasReference: boolean;
   onQuickAdopt?: (entry: NovelAssistantEntry) => Promise<{ success: boolean; message: string }>;
   onManualSelect?: () => void;
+  referenceAdoptionBusy?: boolean;
+  referenceAdoptionApplied?: boolean;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const [notice, setNotice] = useState('');
   const [followup, setFollowup] = useState(false);
   const [quickAdopting, setQuickAdopting] = useState(false);
-  const [showQuickAdoptDialog, setShowQuickAdoptDialog] = useState(false);
   const running = entries.find(entry => entry.status === 'running');
   const latest = [...entries].reverse().find(entry => entry.status === 'completed' && entry.purpose === 'advisor');
   const last = entries[entries.length - 1];
   const disabled = busy || loading || workflowBusy;
   const hasLibrary = (librarySize || 0) > 0;
-  // 在小说顾问阶段，即使已有写法也应该显示按钮（可以继续优化）
-  const hasAdopted = false; // 临时修改：始终允许快速采用
-  const hasMechanismRecommendations = !!(latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length);
+  const hasAdopted = hasReference || (adoptedCount || 0) > 0;
+  const hasRecommendations = !!(latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length
+    || latest?.advisor_sections?.style_recommendations?.adopted_styles?.length
+    || latest?.advisor_sections?.conflict_recommendations?.adopted_conflicts?.length);
   const quick = (value: string) => { onQuestion(value); setFollowup(false); input.current?.focus(); };
 
-  // 调试日志 - 详细输出按钮显示条件
-  console.log('=== [NovelAdvisorConversation] 按钮显示条件诊断 ===');
-  console.log('1. hasMechanismRecommendations:', hasMechanismRecommendations,
-    '(mechanism数量:', latest?.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length || 0, ')');
-  console.log('2. onQuickAdopt存在:', !!onQuickAdopt);
-  console.log('3. hasAdopted:', hasAdopted, '(adoptedCount:', adoptedCount, ')');
-  console.log('4. 按钮应该显示:', hasMechanismRecommendations && !!onQuickAdopt && !hasAdopted);
-  console.log('5. latest entry ID:', latest?.id);
-  console.log('6. mechanism_recommendations 完整数据:', latest?.advisor_sections?.mechanism_recommendations);
-  console.log('============================================');
-
-  const handleQuickAdopt = async (skipCompatibility: boolean) => {
-    console.log('[handleQuickAdopt] 开始快速采用，参数:', { skipCompatibility, hasLatest: !!latest, hasOnQuickAdopt: !!onQuickAdopt });
-    if (!latest || !onQuickAdopt) return;
-    setShowQuickAdoptDialog(false);
+  const handleQuickAdopt = async () => {
+    if (!latest || !onQuickAdopt || quickAdopting || referenceAdoptionBusy) return;
+    setNotice('');
     setQuickAdopting(true);
     try {
       const result = await onQuickAdopt(latest);
-      console.log('[handleQuickAdopt] 快速采用结果:', result);
       setNotice(result.message);
     } catch (error) {
-      console.error('[handleQuickAdopt] 快速采用失败:', error);
-      setNotice(`快速采用失败：${error instanceof Error ? error.message : String(error)}`);
+      setNotice(`采用结果尚未确认：${error instanceof Error ? error.message : String(error)}。请核对后台结果。`);
     } finally {
       setQuickAdopting(false);
     }
@@ -162,83 +150,21 @@ export default function NovelAdvisorConversation({
       {latest.advisor_sections?.style_recommendations && <details className="rounded-xl border border-purple-300/25 bg-purple-300/5 p-4"><summary className="cursor-pointer text-sm font-medium">🎨 推荐的文风选择</summary><div className="mt-4 space-y-4 text-xs">{(latest.advisor_sections.style_recommendations.adopted_styles?.length ?? 0) > 0 && <div><p className="mb-2 font-medium text-purple-700">推荐采用的风格：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.style_recommendations.adopted_styles!.map((s, i) => <li key={i}>【{s.priority}】<strong>{s.style}</strong> - {s.reason}（{s.usage_in_story}）</li>)}</ul></div>}{(latest.advisor_sections.style_recommendations.avoid_styles?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-amber-600">⚠️ 避免的风格：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.style_recommendations.avoid_styles!.map((s, i) => <li key={i}><strong>{s.style}</strong>：{s.reason}</li>)}</ul></div>}</div></details>}
       {latest.advisor_sections?.conflict_recommendations && <details className="rounded-xl border border-orange-300/25 bg-orange-300/5 p-4"><summary className="cursor-pointer text-sm font-medium">⚔️ 推荐的冲突模式</summary><div className="mt-4 space-y-4 text-xs">{(latest.advisor_sections.conflict_recommendations.adopted_conflicts?.length ?? 0) > 0 && <div><p className="mb-2 font-medium text-orange-700">推荐采用的冲突：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.conflict_recommendations.adopted_conflicts!.map((c, i) => <li key={i}>【{c.priority}】<strong>{c.conflict}</strong> - {c.reason}（{c.usage_in_story}）</li>)}</ul></div>}{(latest.advisor_sections.conflict_recommendations.avoid_conflicts?.length ?? 0) > 0 && <div className="mt-3"><p className="mb-2 font-medium text-amber-600">⚠️ 避免的冲突：</p><ul className="space-y-1 ml-4">{latest.advisor_sections.conflict_recommendations.avoid_conflicts!.map((c, i) => <li key={i}><strong>{c.conflict}</strong>：{c.reason}</li>)}</ul></div>}</div></details>}
 
-      {showQuickAdoptDialog && hasMechanismRecommendations && onQuickAdopt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowQuickAdoptDialog(false)}>
-          <div className="mx-4 max-w-lg rounded-2xl border border-border bg-background p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold">快速采用 AI 推荐</h3>
-            <p className="mt-3 text-sm leading-7 text-muted-foreground">
-              将自动完成以下操作：
-            </p>
-            <ul className="mt-3 space-y-2 text-sm">
-              <li className="flex items-start gap-2">
-                <span className="text-primary">✓</span>
-                <span>引用写法库到本书候选</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-primary">✓</span>
-                <span>自动采用 AI 推荐的 {latest.advisor_sections?.mechanism_recommendations?.adopted_from_library?.length || 0} 条写法机制</span>
-              </li>
-              {(latest.advisor_sections?.style_recommendations?.adopted_styles?.length || 0) > 0 && (
-                <li className="flex items-start gap-2">
-                  <span className="text-primary">✓</span>
-                  <span>自动采用 AI 推荐的 {latest.advisor_sections?.style_recommendations?.adopted_styles?.length || 0} 条文风选择</span>
-                </li>
-              )}
-              {(latest.advisor_sections?.conflict_recommendations?.adopted_conflicts?.length || 0) > 0 && (
-                <li className="flex items-start gap-2">
-                  <span className="text-primary">✓</span>
-                  <span>自动采用 AI 推荐的 {latest.advisor_sections?.conflict_recommendations?.adopted_conflicts?.length || 0} 条冲突模式</span>
-                </li>
-              )}
-              <li className="flex items-start gap-2">
-                <span className="text-primary">✓</span>
-                <span>保存到已采用列表（可在"本书参考写法"中查看和调整）</span>
-              </li>
-            </ul>
-            <div className="mt-5 flex flex-wrap justify-end gap-3">
-              <button
-                onClick={() => setShowQuickAdoptDialog(false)}
-                className="rounded-lg border border-border px-4 py-2 text-sm"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => {
-                  console.log('[手动选择按钮] 点击了，调用 onManualSelect');
-                  setShowQuickAdoptDialog(false);
-                  onManualSelect?.();
-                }}
-                className="rounded-lg border border-primary/30 px-4 py-2 text-sm text-primary"
-              >
-                手动选择
-              </button>
-              <button
-                onClick={() => handleQuickAdopt(true)}
-                className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground"
-              >
-                确认快速采用
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="flex flex-wrap gap-3">
         <button disabled={disabled} onClick={() => { setFollowup(true); onQuestion(''); input.current?.focus(); }} className="flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-sm disabled:opacity-50"><MessageCircle className="h-4 w-4" />继续讨论这个方向</button>
 
-        {hasMechanismRecommendations && onQuickAdopt && (
+        {hasRecommendations && onQuickAdopt && (
           <button
-            disabled={disabled || quickAdopting}
-            onClick={() => {
-              console.log('[快速采用按钮] 点击了，准备显示对话框');
-              setShowQuickAdoptDialog(true);
-            }}
+            disabled={disabled || quickAdopting || referenceAdoptionBusy}
+            onClick={() => void handleQuickAdopt()}
             className="flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50"
           >
             {quickAdopting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {quickAdopting ? '正在采用推荐...' : ((adoptedCount || 0) > 0 ? '更新为 AI 推荐' : '快速采用 AI 推荐')}
+            {quickAdopting || referenceAdoptionBusy ? '正在检查兼容…' : referenceAdoptionApplied ? '重新检查兼容与人物适配' : '检查兼容并采用'}
           </button>
         )}
+
+        {onManualSelect && <button disabled={disabled || referenceAdoptionBusy} onClick={onManualSelect} className="rounded-xl border border-border px-4 py-3 text-sm disabled:opacity-50">手动选择参考写法</button>}
 
         <button disabled={disabled || !!receipts?.[latest.id] || !(latest.suggestions || []).some(item => item.key === 'premise')} onClick={() => setNotice(onAdopt(latest).message)} className="rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">{receipts?.[latest.id] ? '这套方案已采用' : established ? '采用建议，保留现有进度' : '采用方案，填写设置并继续'}</button>
       </div>

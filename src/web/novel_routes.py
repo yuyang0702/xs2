@@ -45,6 +45,9 @@ _FANQIE_HOSTS = {"fanqienovel.com", "www.fanqienovel.com"}
 
 
 def require_manual_control(request: Request, root: Path):
+    adoption = getattr(request.app.state, "novel_reference_adoption_jobs", None)
+    if adoption and adoption.has_active(root):
+        raise HTTPException(409, "正在检查并采用本书写法，请等待完成后修改作品资料")
     automation = getattr(request.app.state, "novel_automation", None)
     if automation and automation.has_active(root):
         raise HTTPException(409, "后台自动创作正在推进，请先暂停后修改作品资料")

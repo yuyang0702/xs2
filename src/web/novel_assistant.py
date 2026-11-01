@@ -17,9 +17,11 @@ class NovelAssistantJobs:
     def delegate(self):
         service = console_service()  # Recheck enabled owner even with an existing instance.
         if self._delegate is None:
+            from .novel_reference_adoption import reference_catalog
             self._delegate = service.create_assistant(
                 lambda **kwargs: create_llm(**kwargs),
                 lambda required=False: story_support(required=required),
+                catalog_loader=reference_catalog,
             )
         return self._delegate
 

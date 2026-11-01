@@ -16,12 +16,13 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def enrich_candidates(old, new):
+def enrich_candidates(old, new, *, exact_ids=False):
     """Keep existing IDs and decisions usable when a source is analyzed again."""
     merged = dict(new)
     candidates = [{**item, "source": item.get("source") or old.get("source", {})} for item in old.get("candidates", [])]
     for item in new.get("candidates", []):
-        if not any(item.get("candidate_id") == before.get("candidate_id") or item.get("mechanism") == before.get("mechanism") for before in candidates):
+        if not any(item.get("candidate_id") == before.get("candidate_id") or
+                   (not exact_ids and item.get("mechanism") == before.get("mechanism")) for before in candidates):
             candidates.append({**item, "source": item.get("source") or new.get("source", {})})
     merged["sources"] = []
     for data in (old, new):

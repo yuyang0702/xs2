@@ -502,16 +502,16 @@ export type NovelAssistantEntry = {
     writing: string;
     risks: string;
     mechanism_recommendations?: {
-      adopted_from_library?: Array<{mechanism: string; usage_in_story: string; priority: string; chapter_placement: string}>;
+      adopted_from_library?: Array<{library_id?: string; candidate_id?: string; mechanism: string; usage_in_story: string; priority: string; chapter_placement: string}>;
       new_mechanisms?: Array<{mechanism: string; reason: string; synergy_with: string[]; priority: string}>;
       avoid_combinations?: Array<{a: string; b: string; reason: string}>;
     };
     style_recommendations?: {
-      adopted_styles?: Array<{style: string; reason: string; usage_in_story: string; priority: string}>;
+      adopted_styles?: Array<{library_id?: string; choice_id?: string; style: string; reason: string; usage_in_story: string; priority: string}>;
       avoid_styles?: Array<{style: string; reason: string}>;
     };
     conflict_recommendations?: {
-      adopted_conflicts?: Array<{conflict: string; reason: string; usage_in_story: string; priority: string}>;
+      adopted_conflicts?: Array<{library_id?: string; choice_id?: string; conflict: string; reason: string; usage_in_story: string; priority: string}>;
       avoid_conflicts?: Array<{conflict: string; reason: string}>;
     };
   };

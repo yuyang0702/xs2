@@ -2,6 +2,8 @@ import NovelResourceGate from "../components/NovelResourceGate";
 import {automationState, readAutomation, controlAutomation} from "../lib/novel-automation";
 import {novelWorkflowId as workflowId, novelStageId} from "../lib/novel-resources";
 import NovelAdvisorConversation from "../components/NovelAdvisorConversation";
+import NovelReferenceAdoptionStatus from "../components/NovelReferenceAdoptionStatus";
+import {startReferenceAdoption, restoreReferenceAdoption, recoverReferenceAdoption, referenceAdoptionOutcome, mergeReferenceAdoption, ReferenceAdoptionRejectedError, type ReferenceAdoptionJob} from "../lib/novel-reference-adoption";
 import { adoptNovelAdvisor, advisorMarkdown } from "../lib/novel-advisor";
 import NovelConfigurationSuggestions from "../components/NovelConfigurationSuggestions";
 import { applyAssistantConfiguration, premiseWithWorldDirection, type ConfigurationReceipt } from "../lib/novel-assistant-configuration";
@@ -1409,7 +1411,7 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   return <div className="mt-5 rounded-xl border border-primary/25 bg-primary/5 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">写法兼容建议</p><span className="rounded-full bg-secondary px-2 py-1 text-xs">{report.status === "skipped" ? "已跳过" : report.status === "pending" ? "等待基线" : "已分析"}</span></div>{report.summary && <p className="mt-3 text-sm leading-7">{report.summary}</p>}{(report.global_risks || []).map((risk, index) => <p key={index} className="mt-3 text-sm leading-7 text-amber-300">全局风险：{risk}</p>)}<div className="mt-3 space-y-2">{(report.recommendations || []).map((item, index) => <details key={`${item.candidate_id || "candidate"}-${index}`} className="rounded-lg border border-border bg-background/50 p-3"><summary className="cursor-pointer text-sm"><span className="font-medium">{referenceTitle(candidateSet?.candidates.find(candidate => candidate.candidate_id === item.candidate_id)?.mechanism || [...(candidateSet?.style_choices || []), ...(candidateSet?.conflict_choices || [])].find(choice => choice.choice_id === item.candidate_id)?.title || `参考建议 ${index + 1}`)}</span><span className="ml-2 text-primary">{decisionLabels[item.decision || ""] || item.decision || "待判断"}</span>{typeof item.score === "number" && <span className="ml-2 text-xs text-muted-foreground">{item.score}/100</span>}</summary>{(item.reasons || []).map((reason, i) => <p key={i} className="mt-3 text-sm leading-7 text-muted-foreground">原因：{reason}</p>)}{(item.conflicts || []).map((conflict, i) => <p key={i} className="mt-3 text-sm leading-7 text-amber-300">{archiveScalar(conflict.severity || "提示", "severity")} · {conflict.field ? archiveLabel(conflict.field.split(".").pop() || conflict.field) : "兼容性"}：{conflict.message}</p>)}{(item.adaptation_plan || []).map((plan, i) => <p key={i} className="mt-3 text-sm leading-7">适配：{plan}</p>)}{(item.questions || []).map((question, i) => <p key={i} className="mt-3 text-sm leading-7 text-primary">需要确认：{question}</p>)}</details>)}</div>{applicable.length > 0 && <div className="mt-4"><button disabled={copied} onClick={fill} className="rounded-lg border border-primary/30 px-4 py-2 text-sm text-primary disabled:opacity-50">{copied ? "已填入适配草稿" : "将风格与冲突建议填入适配草稿"}</button><p role="status" className="mt-2 text-xs leading-6 text-muted-foreground">保留你已填写的说明；不会自动勾选或采用。到「选择与确认」检查后再确认。</p></div>}{report.next_step && <p className="mt-3 text-xs text-muted-foreground">下一步：{report.next_step}</p>}</div>;
 }
 
- function AssistantPanel({ advisorMode = false, workflowBusy = false, onAdoptAdvisor, onManualSelect, setPendingQuickAdoptJump, hasStoryFacts = false, moduleOnly = false, workspace, project, setProject, currentStage, nextStage, definition, candidateSet, impactInventory }: { advisorMode?: boolean; workflowBusy?: boolean; onAdoptAdvisor?: (entry:NovelAssistantEntry)=>{success:boolean;message:string}; onManualSelect?: ()=>void; setPendingQuickAdoptJump?: React.Dispatch<React.SetStateAction<boolean>>; hasStoryFacts?: boolean; moduleOnly?: boolean; workspace: string; project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; currentStage: StageMeta; nextStage?: StageMeta; definition?: WorkflowDefinition; candidateSet: CandidateSet | null; impactInventory: ReturnType<typeof outlineImpactInventory> }) {
+ function AssistantPanel({ advisorMode = false, workflowBusy = false, onAdoptAdvisor, onManualSelect, hasStoryFacts = false, moduleOnly = false, workspace, project, setProject, currentStage, nextStage, definition, candidateSet, impactInventory }: { advisorMode?: boolean; workflowBusy?: boolean; onAdoptAdvisor?: (entry:NovelAssistantEntry)=>{success:boolean;message:string}; onManualSelect?: ()=>void; setPendingQuickAdoptJump?: React.Dispatch<React.SetStateAction<boolean>>; hasStoryFacts?: boolean; moduleOnly?: boolean; workspace: string; project: Project; setProject: React.Dispatch<React.SetStateAction<Project>>; currentStage: StageMeta; nextStage?: StageMeta; definition?: WorkflowDefinition; candidateSet: CandidateSet | null; impactInventory: ReturnType<typeof outlineImpactInventory> }) {
   const cacheKey = storageKey(workspace) + ":assistant-history";
   const [entries, setEntries] = useState<NovelAssistantEntry[]>(() => {
     try { const cached = JSON.parse(localStorage.getItem(cacheKey) || "[]"); return Array.isArray(cached) ? cached : []; } catch { return []; }
@@ -1422,6 +1424,14 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   const [readingEntry, setReadingEntry] = useState<NovelAssistantEntry | null>(null);
   const [scope,setScope] = useState<"book"|"volume"|"chapter">("chapter");
   const [totalLibrarySize, setTotalLibrarySize] = useState(0);
+  const [adoptionJob, setAdoptionJob] = useState<ReferenceAdoptionJob | null>(null);
+  const [adoptionPending, setAdoptionPending] = useState(true);
+  const [adoptionRestoring, setAdoptionRestoring] = useState(true);
+  const [adoptionError, setAdoptionError] = useState("");
+  const [adoptionRefreshKey, setAdoptionRefreshKey] = useState(0);
+  const adoptionGuard = useRef(true);
+  const adoptionObserver = useRef<AbortController | null>(null);
+  const adoptionRequest = useRef<{id:string;entry_id:string} | null>(null);
   const mounted = useRef(true);
   const submitGuard = useRef(false);
   const running = entries.find((entry) => entry.status === "running");
@@ -1430,6 +1440,43 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   const lastAnswer = [...scopedEntries].reverse().find((entry) => entry.status === "completed");
   const busy = submitting || !!running;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const refreshAdoptedSelections = useCallback(async (job:ReferenceAdoptionJob, signal:AbortSignal) => {
+    if (!referenceAdoptionOutcome(job).success) return;
+    const adopted = await getNovelAdoptedWriting(workflowId("build"), workspace);
+    if (!signal.aborted) setProject(current => mergeReferenceAdoption(current, job, adopted));
+  }, [workspace, setProject]);
+  useEffect(() => {
+    const observer = new AbortController();
+    adoptionObserver.current = observer;
+    adoptionGuard.current = true;
+    setAdoptionPending(true);
+    setAdoptionRestoring(true);
+    setAdoptionError("");
+    const options = {signal:observer.signal,onJob:(job:ReferenceAdoptionJob) => {
+      setAdoptionJob(job);
+      setAdoptionRestoring(false);
+    }};
+    const pending = adoptionRequest.current;
+    const result = pending
+      ? recoverReferenceAdoption({id:pending.id, request_id:pending.id, entry_id:pending.entry_id, status:"checking"},workflowId("build"),workspace,options)
+      : restoreReferenceAdoption(workflowId("build"),workspace,options);
+    void result.then(async job => {
+      if (observer.signal.aborted) return;
+      setAdoptionJob(job);
+      if (job) await refreshAdoptedSelections(job, observer.signal);
+      if (observer.signal.aborted) return;
+      const unresolved = !!job && (job.status === "checking" || (job.status === "applied" && !referenceAdoptionOutcome(job).success));
+      adoptionGuard.current = unresolved;
+      setAdoptionPending(unresolved);
+      setAdoptionRestoring(false);
+      if (!unresolved) adoptionRequest.current = null;
+    }).catch(failure => {
+      if (observer.signal.aborted) return;
+      setAdoptionRestoring(false);
+      setAdoptionError(`后台结果尚未核对完成：${failure instanceof Error ? failure.message : String(failure)}。请重新核对，避免重复提交。`);
+    });
+    return () => adoptionObserver.current?.abort();
+  }, [workspace, adoptionRefreshKey, refreshAdoptedSelections]);
   // Fetch total library size for advisor mode
   useEffect(() => {
     if (!advisorMode) return;
@@ -1531,376 +1578,52 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   };
 
   const handleQuickAdopt = async (entry: NovelAssistantEntry): Promise<{success: boolean; message: string}> => {
-    console.log('[handleQuickAdopt] === 开始快速采用流程 ===');
+    if (adoptionGuard.current || workflowBusy) return {success:false,message:'正在核对后台采用结果，请等待或重新核对，避免重复提交。'};
+    const requestId = crypto.randomUUID();
+    const observer = new AbortController();
+    adoptionObserver.current?.abort();
+    adoptionObserver.current = observer;
+    adoptionRequest.current = {id:requestId,entry_id:entry.id};
+    adoptionGuard.current = true;
+    setAdoptionPending(true);
+    setAdoptionError('');
+    setAdoptionJob({id:requestId,request_id:requestId,entry_id:entry.id,status:'checking'});
     try {
-      // 1. 获取写法库列表
-      console.log('[handleQuickAdopt] 步骤1: 获取写法库列表');
-      const libraryList = await listWritingLibrary();
-      console.log('[handleQuickAdopt] 写法库列表:', libraryList);
-      if (!libraryList.items || libraryList.items.length === 0) {
-        return { success: false, message: "写法库为空，无法快速采用。" };
+      const job = await startReferenceAdoption({workflow_id:workflowId('build'),workspace,entry_id:entry.id,request_id:requestId,
+        ...(project._revision !== undefined ? {expected_revision:project._revision} : {})},
+        {signal:observer.signal,onJob:job=>setAdoptionJob(job)});
+      await refreshAdoptedSelections(job,observer.signal);
+      if (observer.signal.aborted) return {success:false,message:'后台采用会继续保存，返回页面后可查看结果。'};
+      const outcome = referenceAdoptionOutcome(job);
+      const unresolved = job.status === 'applied' && !outcome.success;
+      adoptionGuard.current = unresolved;
+      setAdoptionPending(unresolved);
+      if (!unresolved) adoptionRequest.current = null;
+      return outcome;
+    } catch (failure) {
+      if (observer.signal.aborted) return {success:false,message:'后台采用会继续保存，返回页面后可查看结果。'};
+      if (failure instanceof ReferenceAdoptionRejectedError) {
+        adoptionGuard.current = false;
+        adoptionRequest.current = null;
+        setAdoptionPending(false);
+        setAdoptionJob(null);
+        const message = `本次采用请求未开始：${failure.message}`;
+        setAdoptionError(message);
+        return {success:false,message};
       }
-
-      // 2. 默认引用第一个写法库（后续可优化为智能匹配）
-      const libraryId = libraryList.items[0].id;
-      console.log('[handleQuickAdopt] 步骤2: 选择写法库 ID:', libraryId, '名称:', libraryList.items[0].name);
-
-      // 3. 先引用写法库，触发后端生成候选列表
-      console.log('[handleQuickAdopt] 步骤3: 引用写法库到本书');
-      const attachResult = await attachWritingLibrary({
-        workflow_id: workflowId("build"),
-        workspace,
-        library_id: libraryId,
-        refresh: false
-      });
-      console.log('[handleQuickAdopt] 引用成功:', attachResult);
-
-      // 4. 获取完整的候选列表（使用和 CandidateChooser 相同的 API）
-      console.log('[handleQuickAdopt] 步骤4: 获取候选列表（和页面显示的列表相同）');
-      const candidateSet = await getNovelReferenceCandidates(workflowId("build"), workspace);
-      console.log('[handleQuickAdopt] 候选列表:', candidateSet);
-
-      const candidatesList = candidateSet.candidates || [];
-      console.log('[handleQuickAdopt] 候选数量:', candidatesList.length);
-
-      // 5. 提取推荐的写法机制名称
-      const recommendedMechanisms = entry.advisor_sections?.mechanism_recommendations?.adopted_from_library || [];
-      const mechanismNames = recommendedMechanisms.map(m => m.mechanism);
-      console.log('[handleQuickAdopt] 步骤5: 推荐的机制名称:', mechanismNames);
-      console.log('[handleQuickAdopt] 推荐详情:', recommendedMechanisms);
-
-      // 6. 从候选写法中匹配推荐的机制（智能匹配算法）
-      const candidateIds: string[] = [];
-      console.log('[handleQuickAdopt] 步骤6: 开始智能匹配候选写法');
-      console.log('[handleQuickAdopt] 候选总数:', candidatesList.length);
-
-      // 提取关键词的辅助函数
-      const extractKeywords = (text: string): string[] => {
-        // 去除常见后缀和停用词
-        const cleaned = text
-          .replace(/[法方式技巧模式策略手法机制]$/g, '')  // 去掉常见后缀
-          .replace(/[的地得之于在]$/g, '');  // 去掉常见助词
-
-        // 按照常见分隔符分词
-        const words = cleaned.split(/[、，。；：]/g).filter(w => w.length > 0);
-
-        // 返回所有关键词（包括原始词和清理后的词）
-        return [text, cleaned, ...words];
-      };
-
-      // 同义词映射
-      const synonyms: Record<string, string[]> = {
-        '两难': ['困境', '选择', '抉择', '两难'],
-        '困境': ['两难', '选择', '抉择', '困境'],
-        '抉择': ['两难', '困境', '选择', '抉择'],
-        '选择': ['两难', '困境', '抉择', '选择'],
-        '冲突': ['矛盾', '对抗', '争端', '冲突'],
-        '矛盾': ['冲突', '对抗', '争端', '矛盾'],
-      };
-
-      if (Array.isArray(candidatesList) && candidatesList.length > 0) {
-        for (const candidate of candidatesList) {
-          console.log('[handleQuickAdopt] --- 检查候选 ---');
-          console.log('[handleQuickAdopt] ID:', candidate.candidate_id);
-          console.log('[handleQuickAdopt] mechanism:', candidate.mechanism);
-          console.log('[handleQuickAdopt] title:', candidate.title);
-          console.log('[handleQuickAdopt] description:', typeof candidate.description === 'string' ? candidate.description.substring(0, 100) : candidate.description);
-
-          // 检查候选写法是否匹配任何推荐的机制
-          const candidateMechanism = String(candidate.mechanism || '').toLowerCase().trim();
-          const candidateTitle = String(candidate.title || '').toLowerCase().trim();
-          const candidateDescription = String(candidate.description || '').toLowerCase().trim();
-
-          // 智能匹配：机制名、标题、描述
-          const matches = mechanismNames.some(name => {
-            const lowerName = name.toLowerCase().trim();
-            console.log('[handleQuickAdopt]   对比推荐:', name);
-
-            // 1. 精确完整匹配
-            if (candidateMechanism === lowerName || candidateTitle === lowerName) {
-              console.log('[handleQuickAdopt]   ✓ 精确匹配');
-              return true;
-            }
-
-            // 2. 包含匹配（双向）
-            if (candidateMechanism.includes(lowerName) || lowerName.includes(candidateMechanism)) {
-              console.log('[handleQuickAdopt]   ✓ 机制名包含匹配');
-              return true;
-            }
-            if (candidateTitle && (candidateTitle.includes(lowerName) || lowerName.includes(candidateTitle))) {
-              console.log('[handleQuickAdopt]   ✓ 标题包含匹配');
-              return true;
-            }
-
-            // 3. 关键词匹配
-            const nameKeywords = extractKeywords(lowerName);
-            const mechanismKeywords = extractKeywords(candidateMechanism);
-            const titleKeywords = extractKeywords(candidateTitle);
-
-            for (const nk of nameKeywords) {
-              if (nk.length < 2) continue;  // 跳过太短的词
-              for (const mk of mechanismKeywords) {
-                if (mk.length < 2) continue;
-                if (nk.includes(mk) || mk.includes(nk)) {
-                  console.log('[handleQuickAdopt]   ✓ 关键词匹配 (mechanism):', nk, '←→', mk);
-                  return true;
-                }
-              }
-              for (const tk of titleKeywords) {
-                if (tk.length < 2) continue;
-                if (nk.includes(tk) || tk.includes(nk)) {
-                  console.log('[handleQuickAdopt]   ✓ 关键词匹配 (title):', nk, '←→', tk);
-                  return true;
-                }
-              }
-            }
-
-            // 4. 同义词匹配
-            for (const [key, values] of Object.entries(synonyms)) {
-              if (lowerName.includes(key)) {
-                for (const synonym of values) {
-                  if (candidateMechanism.includes(synonym) || candidateTitle.includes(synonym)) {
-                    console.log('[handleQuickAdopt]   ✓ 同义词匹配:', key, '→', synonym);
-                    return true;
-                  }
-                }
-              }
-            }
-
-            // 5. 描述中的深度匹配（仅当前面都不匹配时）
-            if (candidateDescription.length > 20) {
-              const descKeywords = extractKeywords(candidateDescription);
-              for (const nk of nameKeywords) {
-                if (nk.length < 2) continue;
-                for (const dk of descKeywords) {
-                  if (dk.length < 2) continue;
-                  if (nk.includes(dk) || dk.includes(nk)) {
-                    console.log('[handleQuickAdopt]   ✓ 描述关键词匹配:', nk, '←→', dk);
-                    return true;
-                  }
-                }
-              }
-            }
-
-            console.log('[handleQuickAdopt]   ✗ 无匹配');
-            return false;
-          });
-
-          if (matches) {
-            console.log('[handleQuickAdopt] ✅ 最终匹配成功 → ID:', candidate.candidate_id);
-            candidateIds.push(String(candidate.candidate_id));
-          } else {
-            console.log('[handleQuickAdopt] ❌ 最终未匹配');
-          }
-        }
-      } else {
-        console.warn('[handleQuickAdopt] ⚠️ 候选列表为空或格式错误');
-      }
-      console.log('[handleQuickAdopt] ===================');
-      console.log('[handleQuickAdopt] 匹配到的写法ID列表:', candidateIds);
-      console.log('[handleQuickAdopt] 匹配成功数量:', candidateIds.length);
-
-      // 7. 匹配风格选择 (style_choices)
-      console.log('[handleQuickAdopt] 步骤7: 开始匹配风格选择');
-      const styleIds: string[] = [];
-      const styleRecommendations = entry.advisor_sections?.style_recommendations?.adopted_styles || [];
-      const styleNames = styleRecommendations.map(s => s.style);
-      console.log('[handleQuickAdopt] 推荐的风格:', styleNames);
-
-      const styleChoices = candidateSet?.style_choices || [];
-      console.log('[handleQuickAdopt] 可选风格数量:', styleChoices.length);
-
-      if (Array.isArray(styleChoices) && styleChoices.length > 0 && styleNames.length > 0) {
-        for (const choice of styleChoices) {
-          const choiceTitle = String(choice.title || '').toLowerCase().trim();
-          const choiceDescription = String(choice.description || '').toLowerCase().trim();
-
-          const matches = styleNames.some(name => {
-            const lowerName = name.toLowerCase().trim();
-            // 简化匹配：标题或描述包含即可
-            return choiceTitle.includes(lowerName) || lowerName.includes(choiceTitle) ||
-                   choiceDescription.includes(lowerName);
-          });
-
-          if (matches) {
-            console.log('[handleQuickAdopt] ✅ 匹配到风格:', choice.title, '→ ID:', choice.choice_id);
-            styleIds.push(String(choice.choice_id));
-          }
-        }
-      }
-      console.log('[handleQuickAdopt] 匹配到的风格ID列表:', styleIds);
-
-      // 8. 匹配冲突模式 (conflict_choices)
-      console.log('[handleQuickAdopt] 步骤8: 开始匹配冲突模式');
-      const conflictIds: string[] = [];
-      const conflictRecommendations = entry.advisor_sections?.conflict_recommendations?.adopted_conflicts || [];
-      const conflictNames = conflictRecommendations.map(c => c.conflict);
-      console.log('[handleQuickAdopt] 推荐的冲突:', conflictNames);
-
-      const conflictChoices = candidateSet?.conflict_choices || [];
-      console.log('[handleQuickAdopt] 可选冲突数量:', conflictChoices.length);
-
-      if (Array.isArray(conflictChoices) && conflictChoices.length > 0 && conflictNames.length > 0) {
-        for (const choice of conflictChoices) {
-          const choiceTitle = String(choice.title || '').toLowerCase().trim();
-          const choiceDescription = String(choice.description || '').toLowerCase().trim();
-
-          const matches = conflictNames.some(name => {
-            const lowerName = name.toLowerCase().trim();
-            return choiceTitle.includes(lowerName) || lowerName.includes(choiceTitle) ||
-                   choiceDescription.includes(lowerName);
-          });
-
-          if (matches) {
-            console.log('[handleQuickAdopt] ✅ 匹配到冲突:', choice.title, '→ ID:', choice.choice_id);
-            conflictIds.push(String(choice.choice_id));
-          }
-        }
-      }
-      console.log('[handleQuickAdopt] 匹配到的冲突ID列表:', conflictIds);
-
-      // 9. 更新项目状态：引用写法库 + 选中推荐的写法、风格、冲突
-      console.log('[handleQuickAdopt] 步骤9: 更新项目状态（三类内容）');
-      console.log('[handleQuickAdopt] 当前 project.selected:', project.selected);
-      console.log('[handleQuickAdopt] 当前 project.selectedStyles:', project.selectedStyles);
-      console.log('[handleQuickAdopt] 当前 project.selectedConflicts:', project.selectedConflicts);
-      console.log('[handleQuickAdopt] 当前 project.libraryRefs:', project.libraryRefs);
-
-      const newSelected = [...new Set([...project.selected, ...candidateIds])];
-      const newSelectedStyles = [...new Set([...(project.selectedStyles || []), ...styleIds])];
-      const newSelectedConflicts = [...new Set([...(project.selectedConflicts || []), ...conflictIds])];
-      const newLibraryRefs = [...new Set([...project.libraryRefs, libraryId])];
-
-      console.log('[handleQuickAdopt] 新的 selected:', newSelected);
-      console.log('[handleQuickAdopt] 新的 selectedStyles:', newSelectedStyles);
-      console.log('[handleQuickAdopt] 新的 selectedConflicts:', newSelectedConflicts);
-      console.log('[handleQuickAdopt] 新的 libraryRefs:', newLibraryRefs);
-
-      // 9a. 先更新写法选择状态
-      setProject(current => {
-        const updated = {
-          ...current,
-          writingMode: "reuse" as const,
-          libraryRefs: newLibraryRefs,
-          selected: newSelected,
-          selectedStyles: newSelectedStyles,
-          selectedConflicts: newSelectedConflicts,
-          persisted: true,  // ← 关键：触发 localStorage 持久化
-        };
-        console.log('[handleQuickAdopt] setProject 调用（三类选择），更新后的状态:', updated);
-        console.log('[handleQuickAdopt] 关键字段检查:');
-        console.log('  - writingMode:', updated.writingMode);
-        console.log('  - libraryRefs:', updated.libraryRefs);
-        console.log('  - selected:', updated.selected);
-        console.log('  - selectedStyles:', updated.selectedStyles);
-        console.log('  - selectedConflicts:', updated.selectedConflicts);
-        console.log('  - persisted:', updated.persisted);
-
-        // 立即手动保存到 localStorage（不等待 useEffect）
-        try {
-          const storageKey = `novel-project-${workspace}`;
-          localStorage.setItem(storageKey, JSON.stringify(updated));
-          console.log('[handleQuickAdopt] ✅ 已立即保存到 localStorage:', storageKey);
-        } catch (error) {
-          console.error('[handleQuickAdopt] ❌ localStorage 保存失败:', error);
-        }
-
-        return updated;
-      });
-
-      // 9b. 立即打印最终状态供调试
-      console.log('[handleQuickAdopt] ========== 最终状态 ==========');
-      console.log('[handleQuickAdopt] candidateIds (写法):', candidateIds);
-      console.log('[handleQuickAdopt] styleIds (风格):', styleIds);
-      console.log('[handleQuickAdopt] conflictIds (冲突):', conflictIds);
-      console.log('[handleQuickAdopt] libraryId:', libraryId);
-      console.log('[handleQuickAdopt] newSelected:', newSelected);
-      console.log('[handleQuickAdopt] newSelectedStyles:', newSelectedStyles);
-      console.log('[handleQuickAdopt] newSelectedConflicts:', newSelectedConflicts);
-      console.log('[handleQuickAdopt] newLibraryRefs:', newLibraryRefs);
-      console.log('[handleQuickAdopt] =====================================');
-
-      // 9c. 延迟验证状态是否真的保存了
-      setTimeout(() => {
-        try {
-          const storageKey = `novel-project-${workspace}`;
-          const savedData = localStorage.getItem(storageKey);
-          if (savedData) {
-            const savedProject = JSON.parse(savedData);
-            console.log('[handleQuickAdopt] ✅ localStorage 验证:');
-            console.log('  - 保存的 selected:', savedProject.selected);
-            console.log('  - 保存的 selectedStyles:', savedProject.selectedStyles);
-            console.log('  - 保存的 selectedConflicts:', savedProject.selectedConflicts);
-            console.log('  - 保存的 libraryRefs:', savedProject.libraryRefs);
-            console.log('  - 保存的 persisted:', savedProject.persisted);
-            console.log('  - 保存的 writingMode:', savedProject.writingMode);
-          } else {
-            console.error('[handleQuickAdopt] ❌ localStorage 中找不到项目数据！');
-          }
-        } catch (error) {
-          console.error('[handleQuickAdopt] ❌ localStorage 验证失败:', error);
-        }
-      }, 250);
-
-      // 7. 采用顾问建议的配置（可选，失败不影响写法采用）
-      console.log('[handleQuickAdopt] 步骤7: 采用顾问建议配置');
-      let configAdopted = false;
-      try {
-        if (onAdoptAdvisor) {
-          const adoptResult = onAdoptAdvisor(entry);
-          console.log('[handleQuickAdopt] onAdoptAdvisor 返回:', adoptResult);
-          configAdopted = adoptResult?.success || false;
-
-          // 如果配置采用成功，需要再次触发状态保存
-          if (configAdopted) {
-            setTimeout(() => {
-              setProject(current => ({ ...current, persisted: true }));
-            }, 50);
-          }
-        } else {
-          console.log('[handleQuickAdopt] onAdoptAdvisor 不存在，跳过配置采用');
-        }
-      } catch (error) {
-        console.error('[handleQuickAdopt] 采用配置时出错（不影响写法采用）:', error);
-      }
-
-      // 8. 标记需要跳转到"本书参考写法"页面（由 useEffect 监听后执行）
-      console.log('[handleQuickAdopt] 步骤8: 设置跳转标记');
-      console.log('[handleQuickAdopt] onManualSelect 存在:', !!onManualSelect);
-
-      if (onManualSelect && setPendingQuickAdoptJump) {
-        // 不直接跳转，而是设置标记，让 useEffect 在状态更新完成后自动跳转
-        console.log('[handleQuickAdopt] 设置 pendingQuickAdoptJump = true，等待 useEffect 处理跳转');
-        setPendingQuickAdoptJump(true);
-      } else {
-        console.log('[handleQuickAdopt] ⚠️ onManualSelect 不存在，无法自动跳转。');
-      }
-
-      console.log('[handleQuickAdopt] === 快速采用流程完成 ===');
-
-      const totalMatched = candidateIds.length + styleIds.length + conflictIds.length;
-      const successMessage = totalMatched > 0
-        ? `✅ 已快速采用！引用了写法库「${libraryList.items[0].name}」，已选中 ${candidateIds.length} 条写法、${styleIds.length} 条风格、${conflictIds.length} 条冲突。${onManualSelect ? '正在跳转...' : '请点击"本书参考写法"查看。'}${configAdopted ? '' : '\n\n💡 提示：配置建议未自动采用，你可以在结果下方手动点击"采用方案"按钮。'}`
-        : `⚠️ 已引用写法库「${libraryList.items[0].name}」，但未找到匹配的推荐内容。\n\n可能原因：\n1. AI 推荐的名称与写法库中的名称不匹配\n2. 写法库中暂无相关内容\n\n请手动在"本书参考写法"中选择合适的写法、风格和冲突。`;
-
-      return {
-        success: true,  // 只要引用了写法库就算成功
-        message: successMessage
-      };
-    } catch (error) {
-      console.error('[handleQuickAdopt] ❌ 快速采用失败:', error);
-      return {
-        success: false,
-        message: `快速采用失败：${error instanceof Error ? error.message : String(error)}`
-      };
+      const message = `采用结果尚未确认：${failure instanceof Error ? failure.message : String(failure)}。请重新核对后台结果，避免重复提交。`;
+      setAdoptionError(message);
+      return {success:false,message};
     }
   };
-
-  if (advisorMode) return <><NovelAdvisorConversation question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)} onQuickAdopt={handleQuickAdopt} onManualSelect={onManualSelect}/>
+  const adoptionStatus = <NovelReferenceAdoptionStatus job={adoptionJob} error={adoptionError} restoring={adoptionRestoring} onRefresh={()=>setAdoptionRefreshKey(key=>key+1)}/>;
+  const latestAdvisor = [...entries].reverse().find(entry=>entry.status === 'completed' && entry.purpose === 'advisor');
+  if (advisorMode) return <>{adoptionStatus}<NovelAdvisorConversation question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)} onQuickAdopt={handleQuickAdopt} onManualSelect={onManualSelect} referenceAdoptionBusy={adoptionPending} referenceAdoptionApplied={adoptionJob?.status === "applied" && adoptionJob.entry_id === latestAdvisor?.id && referenceAdoptionOutcome(adoptionJob).success}/>
     {readingEntry && <NovelReadingDialog title="AI 小说顾问 · 讨论结果" onClose={()=>setReadingEntry(null)}><details className="mb-5 text-sm leading-7 text-muted-foreground"><summary className="cursor-pointer">查看本次讨论的原始想法</summary><p className="mt-3 whitespace-pre-wrap">{readingEntry.question}</p></details><NovelArchiveContent content={advisorMarkdown(readingEntry.reply || readingEntry.message || "暂无分析内容")}/>{readingEntry.advisor_sections && Object.entries(readingEntry.advisor_sections).map(([key,content])=><section key={key} className="mt-6"><h3 className="mb-3 font-semibold">{{direction:"推荐的故事方向",hook:"核心看点",writing:"适合的写法",risks:"需要注意的问题"}[key]}</h3><NovelArchiveContent content={advisorMarkdown(typeof content === 'string' ? content : '')}/></section>)}</NovelReadingDialog>}
   </>;
   return <aside className={cardClass + " h-fit p-5 xl:sticky xl:top-24"}>
     <div className="flex items-center gap-2"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary"><Sparkles className="h-4 w-4" /></div><div><h3 className="font-semibold">创作助手</h3><p className="text-xs text-emerald-400">默认调用大模型 · {currentStage.id === "reference-distillation" ? "记录随资料任务保存" : "记录随作品保存"}</p></div></div>
+    {adoptionStatus}
     <div className="mt-5 rounded-xl bg-secondary/40 p-4"><p className="text-sm leading-6">{nextStage ? "完成「" + currentStage.title + "」后，下一步是「" + nextStage.title + "」。" : moduleOnly ? "可随时讨论参考分析与适配，创作流程可独立继续。" : "当前已经是最后一步。"}</p>{nextStage && <><p className="mt-3 text-xs leading-5 text-muted-foreground">{nextInputs.length ? "会读取 " + nextInputs.slice(0, 4).map((field) => field.name || LABELS[field.key] || field.key).join("、") + (nextInputs.length > 4 ? "等参数" : "。") : "这个步骤不需要额外填写参数。"}</p>{missing.length > 0 && <p className="mt-3 flex gap-2 text-xs text-amber-300"><CircleAlert className="h-4 w-4 shrink-0" />还缺少：{missing.map((field) => field.name || LABELS[field.key] || field.key).join("、")}</p>}</>}</div>
     {!moduleOnly && <div className="mt-4"><label className="text-xs">讨论范围<select aria-label="讨论范围" value={scope} onChange={event=>setScope(event.target.value as typeof scope)} className={inputClass+" mt-2"}><option value="chapter">当前章节 · 第 {Number(project.values.chapter_number || '0001')} 章</option><option value="volume">当前卷</option><option value="book">整本书</option></select></label><p className="mt-2 text-xs leading-6 text-muted-foreground">结合人物处境、世界局势、伏笔与本书写法；没有参考资料也能原创。</p><div className="mt-3 flex flex-wrap gap-2">{[{label:'给几个发展方向',question:'请结合当前进度，给出2-3个有区别的后续剧情方向，说明前文依据、人物动机、冲突、代价、伏笔与期待兑现，并给出可采用的章节计划。'},{label:'检查伏笔与动机',question:'请检查当前计划中的伏笔、人物动机与世界因果，指出具体问题；没有需要修改的地方就说明原因。'},{label:'加强看点与爽点',question:'请判断当前剧情是否像过程记录，结合人物独立目标提出自然的冲突、情感和期待兑现方案，避免空降反转或固定打脸。'}].map(item=><button key={item.label} disabled={busy || loadingHistory} onClick={()=>void ask(item.question,'plot')} className="rounded-lg border border-primary/30 px-2.5 py-2 text-xs text-primary disabled:opacity-50">{item.label}</button>)}</div></div>}
     <label className="mt-4 block text-xs font-medium">告诉助手你要分析什么<textarea disabled={busy} value={project.assistantPlan} onChange={(event) => setProject((current) => ({ ...current, assistantPlan: event.target.value }))} rows={4} placeholder="例如：我想写末日丧尸短篇，请给我题材、故事创意、递进冲突和伏笔。" className={inputClass + " mt-2 text-xs"} /></label>

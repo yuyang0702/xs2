@@ -343,6 +343,11 @@ async def create_task(workflow_id: str, request: Request,
     返回 task_id，前端随后调用 run 接口启动。
     如果 workflow 没有定义变量，则 parameter_values 可留空。"""
     mgr = _ensure_http_mutation_allowed(request, workflow_id)
+    adoption = getattr(request.app.state, "novel_reference_adoption_jobs", None)
+    if adoption:
+        root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=body.workspace_override)
+        if adoption.has_active(root):
+            raise HTTPException(409, "正在检查并采用本书写法，请等待完成后启动任务")
     automation = getattr(request.app.state, "novel_automation", None)
     if automation:
         root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=body.workspace_override)
@@ -368,6 +373,13 @@ async def run_task(workflow_id: str, task_id: str, request: Request,
                    body: WorkflowRunRequest = WorkflowRunRequest()):
     """启动一个已创建的任务。"""
     mgr = _ensure_http_mutation_allowed(request, workflow_id)
+    adoption = getattr(request.app.state, "novel_reference_adoption_jobs", None)
+    if adoption:
+        task = mgr.get_task(workflow_id, task_id)
+        if task:
+            root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=task.get("workspace_override"))
+            if adoption.has_active(root):
+                raise HTTPException(409, "正在检查并采用本书写法，请等待完成后启动任务")
     result = await mgr.run_task(workflow_id, task_id, from_node_id=body.from_node_id)
     if not result.get("success"):
         _raise_runtime_draining(result)

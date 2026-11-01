@@ -249,7 +249,7 @@ def test_actual_assistant_adapter_exposes_support_for_continuation(tmp_path, mon
     from src.web.novel_assistant import NovelAssistantJobs
     root, manager, service = setup(tmp_path)
     delegate = SimpleNamespace(tasks={}, support_loader=lambda **kwargs: SimpleNamespace(preflight=lambda *args: {"ready": True}))
-    monkeypatch.setattr("src.web.novel_assistant.console_service", lambda: SimpleNamespace(create_assistant=lambda *args: delegate))
+    monkeypatch.setattr("src.web.novel_assistant.console_service", lambda: SimpleNamespace(create_assistant=lambda *args, **kwargs: delegate))
     service.assistant_jobs = NovelAssistantJobs()
     data = state(root); data["stageId"] = "mvp"; write(root / ".novel-project.json", data)
     asyncio.run(service.tick(root))

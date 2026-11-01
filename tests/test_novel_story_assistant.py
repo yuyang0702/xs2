@@ -82,3 +82,5 @@ def enabled_console_plugin(tmp_path, monkeypatch):
     plugin = Path(__file__).resolve().parents[2] / 'DeterminFlow-Plugins/plugins/xs2-novel-flywheel/resources/script-library'
     catalog = ScriptLibraryCatalog(tmp_path / 'user-library', [OwnedPath('xs2-novel-flywheel', plugin)])
     monkeypatch.setattr(novel_plugin, 'get_script_library', lambda: catalog)
+    from src.web import novel_reference_adoption
+    monkeypatch.setattr(novel_reference_adoption, 'reference_catalog', lambda: [])

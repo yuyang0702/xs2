@@ -55,6 +55,9 @@ def start(payload: ProjectSave, request: Request):
         raise HTTPException(400, "当前工作流不属于小说插件")
     root = _root(request, payload.workflow_id, payload.workspace, allow_missing=True)
     with _lock:
+        adoption = getattr(request.app.state, "novel_reference_adoption_jobs", None)
+        if adoption and adoption.has_active(root):
+            raise HTTPException(409, "正在检查并采用本书写法，请等待完成后启动自动创作")
         existing = read_json_file(root / _manifest, {})
         revision = existing.get("_revision", 0)
         if service.has_active(root) or payload.state.get("_revision", 0) != revision:
