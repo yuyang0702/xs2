@@ -1,64 +1,76 @@
-"""Production progress from saved tasks and real artifacts, never chapter * 5%."""
+"""Forward persisted workbench task facts to the installed novel plugin."""
 from pathlib import Path
+
+from src.workflow.token_usage import aggregate_token_usage
+
+from .novel_chapters import chapter_tasks
 from .novel_library import read_json
-from .novel_repair import reader_report_path
-
-STAGES = [('build', '建立世界观'), ('character', '创建角色'), ('story-plan', '规划故事'),
-          ('outline', '生成大纲'), ('mvp', '生成正文'), ('polish', '润色正文'),
-          ('reader-sim', '读者评估'), ('post-hoc', '质量审核'), ('export', '导出成品')]
-ACTIVE = {'pending', 'preparing', 'running', 'retry_waiting', 'resume_pending'}
+from .novel_plugin import console_service
 
 
-def progress(root, state, workflows_dir):
-    raw_chapter = str(state.get('values', {}).get('chapter_number', '1'))
-    chapter = raw_chapter.zfill(4) if raw_chapter.isdigit() and len(raw_chapter) <= 4 else '0001'
-    artifacts = {'build': 'meta/world_foundation.md', 'character': 'meta/character_profiles.md',
-                 'story-plan': 'meta/story_plan.md', 'outline': 'outline/near_term_outline.md',
-                 'mvp': f'story/{chapter}/chapter.md', 'polish': f'story/{chapter}/chapter.md',
-                 'reader-sim': reader_report_path(root, chapter).relative_to(root).as_posix(), 'post-hoc': f'story/{chapter}/diff_story_confirmed.md',
-                 'export': 'export/manuscript.md'}
-    results = []
-    current = ''
-    refs = state.get('refs', {})
-    newest_upstream = ''
-    for stage, label in STAGES:
-        reference = refs.get(stage, {})
-        workflow = str(reference.get('workflow_id', ''))
-        task_id = str(reference.get('task_id', ''))
-        path = (workflows_dir / workflow / 'tasks' / (task_id + '.json')).resolve()
-        task = read_json(path, {}) if workflow and task_id and path.is_relative_to(workflows_dir.resolve()) else {}
-        status = task.get('status', '')
-        if stage in {'mvp', 'polish', 'reader-sim', 'post-hoc'} and task:
-            task_chapter = task.get('parameter_values', {}).get('chapter_number')
-            if task_chapter is not None and str(task_chapter).zfill(4) != chapter:
-                task, status, reference = {}, '', {'mismatched_chapter': True}
-        artifact = root / artifacts[stage]
-        exists = artifact.is_file() and artifact.stat().st_size > 0
-        complete = exists and (status == 'completed' or not reference and stage in state.get('completed', []))
-        if task.get('completed_at', '') and task['completed_at'] < newest_upstream:
-            complete = False
-        newest_upstream = max(newest_upstream, task.get('started_at') or '')
-        if status in ACTIVE:
-            current = label + '处理中'
-            complete = False
-        elif status in {'failed', 'interrupted', 'stopped', 'cancelled'}:
-            current = label + '未完成，请处理任务提示'
-        if stage == 'export' and exists:
-            bodies = list((root / 'story').glob('[0-9][0-9][0-9][0-9]/chapter.md'))
-            if any(body.stat().st_mtime > artifact.stat().st_mtime for body in bodies):
-                complete = False
-        results.append({'id': stage, 'label': label, 'completed': complete, 'status': status or ('completed' if complete else 'not_started')})
-    completed = sum(item['completed'] for item in results)
-    exported = results[-1]['completed']
-    report = read_json(reader_report_path(root, chapter), {})
-    if str(report.get('chapter_number', chapter)).zfill(4) != chapter:
-        report = {}
-    if exported:
-        label = current or ('本篇已导出' if state.get('mode') == 'short' else f'第{int(chapter)}章已导出')
+def _measured_usage(task):
+    def recorded(states):
+        return {
+            key: {**row, 'child_states': recorded(row.get('child_states') or {})}
+            for key, row in states.items()
+            if isinstance(row, dict) and row.get('status') != 'skipped' and not row.get('is_skipped')
+        }
+
+    aggregate = aggregate_token_usage(recorded(task.get('node_states') or {}), {}, pricing_config={})
+    calls = aggregate['calls']
+    if calls:
+        models = {call['model_id'] for call in calls if call['model_id'] != 'unknown'}
+        total = sum(call['total_tokens'] for call in calls)
+        count = sum(call['call_count'] for call in calls)
+        basis = 'ledger'
     else:
-        label = current or next((item['label'] + '未完成' for item in results if not item['completed']), '尚未开始')
-    return {'percent': round(completed / len(results) * 100), 'completed_count': completed,
-            'total_count': len(results), 'label': label, 'stages': results,
-            'chapter_count': len(list((root / 'story').glob('[0-9][0-9][0-9][0-9]/chapter.md'))),
-            'can_download': (root / 'export/manuscript.md').is_file(),
-            'export_current': exported, 'reader_verdict': report.get('verdict', '')}
+        models = set(aggregate['by_model']) - {'unknown'}
+        total = aggregate['total']['total_tokens']
+        count = aggregate['total']['call_count']
+        basis = 'summary'
+    if not models and not total and not count:
+        return None
+    return {'basis': basis, 'models': sorted(models), **({'total_tokens': total} if total else {}),
+            **({'call_count': count} if count else {})}
+
+
+def progress(root, state, workflows_dir, *, chapter='', include_details=True, service=None):
+    service = service or console_service().progress
+    tasks = {}
+    usages = {}
+    workflows = Path(workflows_dir).resolve()
+    for stage, reference in (state.get('refs') or {}).items():
+        if not isinstance(reference, dict):
+            continue
+        workflow, task_id = reference.get('workflow_id'), reference.get('task_id')
+        if not all(isinstance(value, str) and value and value not in {'.', '..'}
+                   and '/' not in value and '\\' not in value and ':' not in value
+                   for value in (workflow, task_id)):
+            continue
+        directory = (workflows / workflow / 'tasks').resolve()
+        path = (directory / (task_id + '.json')).resolve()
+        if not directory.is_relative_to(workflows) or path.parent != directory:
+            continue
+        task = read_json(path, {})
+        if not isinstance(task, dict) or task.get('workflow_id', workflow) != workflow or task.get('task_id', task_id) != task_id:
+            continue
+        workspace = task.get('workspace_override')
+        if workspace and (not isinstance(workspace, str) or Path(workspace).resolve() != root.resolve()):
+            continue
+        if isinstance(workspace, str) and Path(workspace).is_absolute():
+            tasks[stage] = task
+        else:
+            # Keep legacy stage status without disclosing an unbound task's details.
+            tasks[stage] = {key: task[key] for key in ('status', 'started_at', 'completed_at', 'parameter_values') if key in task}
+    archived = {}
+    if chapter and include_details:
+        selected = service.chapter_id(chapter)
+        current = service.chapter_id(state.get('values', {}).get('chapter_number', '1')) or '0001'
+        if selected and selected != current:
+            archived = chapter_tasks(root, workflows, selected)
+    if include_details:
+        for stage, task in (tasks | archived).items():
+            if task.get('workspace_override') and (usage := _measured_usage(task)):
+                usages[stage] = usage
+    return service.project_progress(root, state, tasks, usages, selected=chapter,
+                                    include_details=include_details, archived=archived)

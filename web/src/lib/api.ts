@@ -2,6 +2,7 @@
  * REST API 客户端封装
  */
 import { request } from "./http-client";
+import type { NovelProgress } from "./novel-progress-types";
 
 export {
   retryWorkflowNode,
@@ -740,10 +741,11 @@ export async function attachWritingLibrary(payload: { workflow_id: string; works
   });
 }
 
-export type NovelProgress = { percent: number; completed_count: number; total_count: number; label: string; chapter_count: number; can_download: boolean; export_current: boolean; reader_verdict: string };
-export async function getNovelProgress(workflowId: string, workspace: string) {
+export type { NovelProgress } from "./novel-progress-types";
+export async function getNovelProgress(workflowId: string, workspace: string, chapter = "", signal?: AbortSignal) {
   const query = new URLSearchParams({ workflow_id: workflowId, workspace });
-  return request<NovelProgress>(`/novel-console/progress?${query}`);
+  if (chapter) query.set("chapter", chapter);
+  return request<NovelProgress>(`/novel-console/progress?${query}`, { signal });
 }
 
 export async function stopTask(workflowId: string, taskId: string) {

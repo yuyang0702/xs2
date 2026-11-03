@@ -138,7 +138,8 @@ test("progress UI exposes snapshot labels, node counts, elapsed time and retry i
   const html = renderToStaticMarkup(createElement(NovelTaskProgress, { now,
     task: task({ status: "retry_waiting", node_states: {
       done: node("done", "completed"), branch: node("branch", "skipped"),
-      retry: node("retry", "retry_waiting", { started_at: "2026-11-01T03:01:30Z", automatic_retry_count: 2, next_retry_at: "2026-11-01T03:02:30Z" }),
+      retry: node("retry", "retry_waiting", { started_at: "2026-11-01T03:01:30Z", attempt_count: 3,
+        automatic_retry_count: 2, next_retry_at: "2026-11-01T03:02:30Z", error: "连接暂时中断" }),
     } }, definition([["done", "读入"], ["branch", "可选分支"], ["retry", "历史写法分析"]])),
   }));
   assert.match(html, /历史写法分析/);
@@ -148,6 +149,8 @@ test("progress UI exposes snapshot labels, node counts, elapsed time and retry i
   assert.match(html, /阶段耗时 2 分/);
   assert.match(html, /节点耗时 30 秒/);
   assert.match(html, /自动重试 2 次/);
+  assert.match(html, /尝试 3 次/);
+  assert.match(html, /连接暂时中断/);
   assert.match(html, /30 秒后重试/);
   assert.doesNotMatch(html, /预计完成|token|令牌/i);
 });

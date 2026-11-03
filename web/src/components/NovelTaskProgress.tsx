@@ -50,7 +50,8 @@ export default function NovelTaskProgress({ task, now }: Props) {
     {children > 0 && <p className="text-xs leading-6 text-muted-foreground">子任务：{countsText(progress.childCounts)}</p>}
     {focused.length > 0 && <ul aria-label="当前节点" className="space-y-2">{focused.map((node, index) => <li key={`${node.path}:${index}`} className="rounded-lg border border-border px-3 py-2">
       <p className="break-words text-sm">{node.path}<span className="ml-2 text-xs text-muted-foreground">{statusLabels[node.status] || "状态待确认"}</span></p>
-      <p className="mt-1 text-xs leading-6 text-muted-foreground">节点耗时 {duration(node.elapsedSeconds)}{node.automaticRetryCount > 0 ? ` · 自动重试 ${node.automaticRetryCount} 次` : ""}{node.status === "retry_waiting" ? ` · ${node.retryInSeconds === null ? "下次重试时间待确认" : `${duration(node.retryInSeconds)}后重试`}` : ""}</p>
+      <p className="mt-1 text-xs leading-6 text-muted-foreground">节点耗时 {duration(node.elapsedSeconds)}{node.attemptCount !== null ? ` · 尝试 ${node.attemptCount} 次` : ""}{node.automaticRetryCount > 0 ? ` · 自动重试 ${node.automaticRetryCount} 次` : ""}{node.status === "retry_waiting" ? ` · ${node.retryInSeconds === null ? "下次重试时间待确认" : `${duration(node.retryInSeconds)}后重试`}` : ""}</p>
+      {node.reason && <p className="break-words text-xs text-destructive">{node.reason}</p>}
     </li>)}</ul>}
   </section>;
 }

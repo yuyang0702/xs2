@@ -1,41 +1,62 @@
 import json
-from pathlib import Path
-import tempfile
-import unittest
-from src.web.novel_progress import progress, STAGES
+from types import SimpleNamespace
+
+from src.web.novel_progress import progress
 
 
-class NovelProgressTests(unittest.TestCase):
-    def test_real_artifacts_tasks_and_revision_invalidate_old_completion(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)/'book'; flows = Path(directory)/'workflows'
-            paths = ['meta/world_foundation.md', 'meta/character_profiles.md', 'meta/story_plan.md',
-                     'outline/near_term_outline.md', 'story/0001/chapter.md', 'quality/reader_report.json',
-                     'story/0001/diff_story_confirmed.md', 'export/manuscript.md']
-            for rel in paths:
-                p=root/rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('{}' if rel.endswith('.json') else '正文')
-            state={'mode':'short', 'values':{'chapter_number':'0001'}, 'refs':{}}
-            for i,(stage,_) in enumerate(STAGES):
-                state['refs'][stage]={'workflow_id':stage, 'task_id':'task'}
-                p=flows/stage/'tasks/task.json'; p.parent.mkdir(parents=True,exist_ok=True)
-                p.write_text(json.dumps({'status':'completed','started_at':f'2026-10-07T10:{i:02d}:00','completed_at':f'2026-10-07T10:{i:02d}:30'}))
-            self.assertEqual(progress(root,state,flows)['percent'],100)
-            task=flows/'polish/tasks/task.json'
-            task.write_text(json.dumps({'status':'running','started_at':'2026-10-07T11:00:00'}))
-            actual=progress(root,state,flows)
-            self.assertEqual(actual['percent'],56)
-            self.assertIn('润色正文处理中',actual['label'])
-            self.assertFalse(actual['export_current'])
-            self.assertTrue(actual['can_download'])
+def test_progress_forwards_bound_task_and_measured_usage_only(tmp_path):
+    root = tmp_path / 'book'
+    root.mkdir()
+    flows = tmp_path / 'workflows'
+    folder = flows / 'custom-mvp/tasks'
+    folder.mkdir(parents=True)
+    record = {'call_id': 'a', 'model_id': 'fixture:writer', 'total_tokens': 23}
+    task = {'workflow_id': 'custom-mvp', 'task_id': 'one', 'workspace_override': str(root),
+            'node_states': {
+                'writer': {'status': 'completed', 'token_usage_calls': [record],
+                           'child_states': {'same': {'status': 'completed', 'token_usage_calls': [record]}}},
+                'skipped': {'status': 'skipped', 'token_usage_calls': [
+                    {'call_id': 'skipped', 'model_id': 'fixture:unused', 'total_tokens': 99}]},
+            }}
+    (folder / 'one.json').write_text(json.dumps(task))
+    (folder / 'other.json').write_text(json.dumps({**task, 'task_id': 'other', 'workspace_override': str(tmp_path / 'other')}))
+    (folder / 'unbound.json').write_text(json.dumps({**task, 'task_id': 'unbound', 'workspace_override': None,
+                                                    'status': 'failed', 'error': 'foreign detail'}))
+    state = {'refs': {'mvp': {'workflow_id': 'custom-mvp', 'task_id': 'one'},
+                      'polish': {'workflow_id': 'custom-mvp', 'task_id': 'other'},
+                      'reader-sim': {'workflow_id': 'custom-mvp', 'task_id': 'unbound'},
+                      'post-hoc': {'workflow_id': 'custom-mvp', 'task_id': '../tasks/one'}}}
 
-    def test_chapter_count_does_not_imply_completion(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory)/'book'; root.mkdir()
-            p=root/'story/0001/chapter.md';p.parent.mkdir(parents=True);p.write_text('正文')
-            result=progress(root,{'mode':'serial','values':{'chapter_number':'../0001'}},Path(directory)/'flows')
-            self.assertEqual(result['chapter_count'],1)
-            self.assertEqual(result['percent'],0)
-            self.assertFalse(result['can_download'])
+    def project(book, manifest, tasks, usages, *, selected, include_details, archived):
+        assert book == root and manifest is state
+        assert selected == '0002' and include_details and archived == {}
+        assert tasks == {'mvp': task, 'reader-sim': {'status': 'failed'}}
+        assert usages == {'mvp': {'basis': 'ledger', 'models': ['fixture:writer'], 'total_tokens': 23, 'call_count': 1}}
+        return {'result': 'projected'}
+
+    result = progress(root, state, flows, chapter='0002',
+                      service=SimpleNamespace(project_progress=project, chapter_id=lambda value: value.zfill(4)))
+    assert result == {'result': 'projected'}
 
 
-if __name__ == '__main__': unittest.main()
+def test_progress_route_checks_owner_and_never_resolves_invalid_workspace(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src import config
+    from src.core.workspace_manager import WorkspaceManager
+    from src.web import novel_routes
+
+    monkeypatch.setattr(config, 'BASE_DIR', tmp_path)
+    workspace_manager = WorkspaceManager(str(tmp_path / 'data/workspaces'))
+    manager = SimpleNamespace(_ws_manager=workspace_manager, get_workflow_owner=lambda _: 'xs2-novel-flywheel')
+    app = FastAPI()
+    app.state.workflow_manager = manager
+    app.include_router(novel_routes.router)
+    client = TestClient(app)
+    missing = tmp_path / 'data/workspaces/books/not-created'
+    for workspace, status in [(str(missing), 404), ('../../outside', 400), ('', 400)]:
+        response = client.get('/api/novel-console/progress', params={'workflow_id': 'custom-build', 'workspace': workspace})
+        assert response.status_code == status, response.text
+    assert not missing.exists()
+    manager.get_workflow_owner = lambda _: 'other-plugin'
+    assert client.get('/api/novel-console/progress', params={'workflow_id': 'foreign', 'workspace': str(missing)}).status_code == 400

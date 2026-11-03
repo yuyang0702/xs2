@@ -8,6 +8,7 @@ export type NovelNodeCounts = {
 export type NovelProgressNode = {
   id: string; label: string; path: string; status: string;
   elapsedSeconds: number | null; automaticRetryCount: number; retryInSeconds: number | null;
+  attemptCount: number | null; reason: string;
   children: NovelProgressNode[];
 };
 
@@ -76,6 +77,8 @@ export function buildNovelTaskProgress(task: WorkflowTask | null, now = Date.now
       elapsedSeconds: elapsed(state?.started_at, end),
       automaticRetryCount: typeof retryCount === "number" && Number.isFinite(retryCount) ? Math.max(0, Math.floor(retryCount)) : 0,
       retryInSeconds: retryAt !== null && Number.isFinite(now) ? Math.max(0, Math.ceil((retryAt - now) / 1000)) : null,
+      attemptCount: typeof state?.attempt_count === "number" && Number.isInteger(state.attempt_count) && state.attempt_count > 0 ? state.attempt_count : null,
+      reason: state?.error || "",
       children: [],
     };
     addCount(parents.length ? result.childCounts : result.counts, status);

@@ -392,6 +392,10 @@ def known_workspaces() -> list[Path]:
 @router.get("/projects")
 async def list_projects():
     projects = []
+    try:
+        progress_service = getattr(console_service(), "progress", None)
+    except ValueError:
+        progress_service = None
     with _lock:
         for root in known_workspaces():
             if root.is_relative_to((WORKFLOW_WORKSPACES_DIR / "reference-jobs").resolve()):
@@ -406,17 +410,28 @@ async def list_projects():
                 state = {"title": root.name, "mode": "serial" if len(list((root / "story").glob("*/chapter.md"))) > 1 else "short"}
             else:
                 continue
-            projects.append({"workspace": str(root), "state": state,
-                             "progress": progress(root, state, DATA_DIR / "workflows")})
+            item = {"workspace": str(root), "state": state}
+            if progress_service:
+                item["progress"] = progress(root, state, DATA_DIR / "workflows",
+                                            include_details=False, service=progress_service)
+            projects.append(item)
     return {"projects": projects}
 
 
 @router.get("/progress")
-async def get_novel_progress(request: Request, workflow_id: str, workspace: str):
-    manager = _get_manager(request)
-    root = manager._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
+async def get_novel_progress(request: Request, workflow_id: str, workspace: str, chapter: str = ""):
+    from .humanware_routes import character_workspace
+    root = character_workspace(request, workflow_id, workspace)
     state = read_json_file(root / _manifest, {})
-    return progress(root, state, DATA_DIR / "workflows")
+    try:
+        service = getattr(console_service(), "progress", None)
+        if service is None:
+            raise ValueError("小说插件缺少进度服务，请更新插件并重新启动。")
+    except ValueError as error:
+        raise HTTPException(503, str(error)) from error
+    if chapter and not service.chapter_id(chapter):
+        raise HTTPException(400, "请输入有效章节号。")
+    return progress(root, state, DATA_DIR / "workflows", chapter=chapter, service=service)
 
 
 class UrlInspect(BaseModel):
