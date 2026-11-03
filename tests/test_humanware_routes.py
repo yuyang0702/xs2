@@ -212,3 +212,16 @@ def test_assistant_history_get_projects_interruption_without_a_write(voice_clien
     assert response.status_code == 200, response.text
     assert response.json()['entries'][0]['error_code'] == 'interrupted'
     assert target.read_bytes() == original
+
+
+def test_character_assistant_does_not_replay_request_from_another_purpose(voice_client, monkeypatch):
+    from src.web import novel_routes
+    client, book, _, _ = voice_client
+    request_id = 'c0938ed0-d48b-4c14-a4f8-6d54d4fc9846'
+    jobs = SimpleNamespace(history=lambda _: [{'id': request_id, 'status': 'completed', 'purpose': 'general'}])
+    monkeypatch.setattr(novel_routes, '_assistant_jobs', lambda _: jobs)
+    client.app.include_router(novel_routes.router)
+    response = client.post('/api/novel-console/assistant', json=payload(
+        book, request_id=request_id, purpose='dialogue_trial', question='重试'))
+    assert response.status_code == 409, response.text
+    assert not (book / 'learning').exists()

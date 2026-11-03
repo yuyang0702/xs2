@@ -991,6 +991,8 @@ async def novel_assistant(payload: NovelAssistantRequest, request: Request):
             jobs = _assistant_jobs(request)
             existing = next((entry for entry in jobs.history(root) if entry['id'] == str(payload.request_id)), None)
             if existing:
+                if existing.get('purpose', 'general') != payload.purpose:
+                    raise ValueError('该请求编号已用于其他分析，请重新发起请求。')
                 return {"success": True, "entry": existing}
             data = payload.model_dump(mode="json", include={'purpose', 'chapter', 'question', 'character_id',
                                      'section_id', 'character_ids', 'baseline', 'scene', 'expected_revision'})
