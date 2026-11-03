@@ -3,13 +3,15 @@ import importlib.util
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from typing import Literal
 
 from src.config import DATA_DIR
 from src.core.workspace_manager import resolve_workflow_workspace_path
 from .workflow_access import _get_manager, _ensure_http_mutation_allowed, _ensure_workflow_writable
 from .novel_repair import ensure_idle
+from .novel_plugin import OWNER, script_service
 
 router = APIRouter(prefix='/api/humanware', tags=['humanware'])
 
@@ -124,3 +126,105 @@ async def generate_voice_file(payload: VoiceRequest, request: Request):
 async def unsupported_scoring():
     raise HTTPException(501, {'error': 'scoring_unsupported',
                              'message': '当前小说插件未提供独立人味评分，请使用模拟读者工作流的真实评估报告。'})
+
+
+class RevisionRequest(VoiceRequest):
+    expected_revision: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class CharacterPreview(RevisionRequest):
+    character_id: str = Field(min_length=1, max_length=160)
+    section_id: str | None = Field(default=None, max_length=160)
+    source_id: str | None = Field(default=None, max_length=160)
+    replacement: str | None = Field(default=None, max_length=12000)
+    history_id: str | None = Field(default=None, max_length=64)
+
+
+class CharacterApply(RevisionRequest):
+    preview: dict
+
+
+class ProsePolicySave(RevisionRequest):
+    mode: Literal['inherit', 'narrative_led'] | None = None
+    overrides: list[dict] | None = Field(default=None, max_length=100)
+
+
+class RulePreview(RevisionRequest):
+    source_id: str = Field(max_length=200)
+    quote: str = Field(max_length=400)
+    replacement: str = Field(max_length=400)
+
+
+def character_workspace(request, workflow_id, workspace, *, mutate=False, history_dir=None):
+    manager = _get_manager(request)
+    if manager.get_workflow_owner(workflow_id) != OWNER:
+        raise HTTPException(400, '此操作需要小说插件所属的工作流。')
+    root = _workspace(request, workflow_id, workspace, mutate=mutate)
+    from src import config
+    candidate = Path(workspace).expanduser()
+    candidate = candidate if candidate.is_absolute() else config.BASE_DIR / candidate
+    if candidate != root:
+        raise HTTPException(400, '请使用作品原始工作区路径。')
+    if mutate:
+        from .novel_routes import require_manual_control
+        require_manual_control(request, root)
+        ensure_idle(root, history_dir if history_dir is not None else DATA_DIR / 'workflows')
+    return root
+
+
+def _character_operation(request, workflow_id, workspace, service, operation, *args, mutate=False):
+    try:
+        root = character_workspace(request, workflow_id, workspace, mutate=mutate)
+        return getattr(script_service(service), operation)(root, *args)
+    except (ValueError, OSError) as error:
+        raise HTTPException(409, str(error)) from error
+
+
+def _operation(request, payload, service, operation, *args, mutate=False):
+    return _character_operation(request, payload.workflow_id, payload.workspace, service, operation, *args, mutate=mutate)
+
+
+@router.get('/characters')
+async def get_characters(request: Request, workflow_id: str, workspace: str,
+                         chapter: str = Query(default='', max_length=4), q: str = Query(default='', max_length=250)):
+    return _character_operation(request, workflow_id, workspace, 'character_center', 'read', chapter, q)
+
+
+@router.post('/character-preview')
+async def preview_character(payload: CharacterPreview, request: Request):
+    args = payload.model_dump(exclude={'workflow_id', 'workspace', 'expected_revision'}, exclude_none=True)
+    return _operation(request, payload, 'character_center', 'preview', args, payload.expected_revision)
+
+
+@router.post('/character-apply')
+async def apply_character(payload: CharacterApply, request: Request):
+    return _operation(request, payload, 'character_center', 'apply',
+                      payload.preview, payload.expected_revision, mutate=True)
+
+
+@router.get('/character-history')
+async def get_character_history(request: Request, workflow_id: str, workspace: str,
+                                character_id: str | None = Query(default=None, max_length=160)):
+    return _character_operation(request, workflow_id, workspace, 'character_center', 'history', character_id)
+
+
+@router.get('/prose-policy')
+async def get_prose_policy(request: Request, workflow_id: str, workspace: str):
+    return _character_operation(request, workflow_id, workspace, 'prose_policy', 'read')
+
+
+@router.post('/prose-policy')
+async def save_prose_policy(payload: ProsePolicySave, request: Request):
+    args = payload.model_dump(include={'mode', 'overrides'}, exclude_none=True)
+    return _operation(request, payload, 'prose_policy', 'save', args, payload.expected_revision, mutate=True)
+
+
+@router.get('/rule-audit')
+async def get_rule_audit(request: Request, workflow_id: str, workspace: str, chapter: str = '0001'):
+    return _character_operation(request, workflow_id, workspace, 'prose_policy', 'audit', chapter)
+
+
+@router.post('/rule-audit')
+async def preview_rule_override(payload: RulePreview, request: Request):
+    args = payload.model_dump(include={'source_id', 'quote', 'replacement'})
+    return _operation(request, payload, 'prose_policy', 'preview_override', args, payload.expected_revision)

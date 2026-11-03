@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from src.config import DATA_DIR, WORKFLOW_WORKSPACES_DIR
 from .workflow_access import _ensure_http_mutation_allowed, _ensure_workflow_writable, _get_manager
-from .novel_assistant import NovelAssistantJobs
+from .novel_assistant import CHARACTER_PURPOSES, NovelAssistantJobs, character_model
 from .novel_library import adopted_writing, enrich_candidates, fingerprint, profile_from_workspace, usage
 from .novel_mechanism_recommender import generate_recommendations_file
 from .novel_reference_choices import with_reference_choices
@@ -932,9 +932,15 @@ class NovelAssistantRequest(BaseModel):
     missing: list[str] = Field(default_factory=list, max_length=32)
     candidates: list[dict] = Field(default_factory=list, max_length=80)
     conflict_plan: dict = Field(default_factory=dict)
-    purpose: Literal['general', 'reader_repair', 'configure', 'advisor', 'plot'] = 'general'
+    purpose: Literal['general', 'reader_repair', 'configure', 'advisor', 'plot', 'character_edit', 'dialogue_trial'] = 'general'
     chapter: str = Field(default='', max_length=4)
     scope: Literal['book', 'volume', 'chapter'] = 'chapter'
+    character_id: str | None = Field(default=None, max_length=160)
+    section_id: str | None = Field(default=None, max_length=160)
+    character_ids: list[str] | None = Field(default=None, max_length=6)
+    baseline: str | None = Field(default=None, max_length=12000)
+    scene: str | None = Field(default=None, max_length=4000)
+    expected_revision: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
 
 
 def _assistant_jobs(request: Request) -> NovelAssistantJobs:
@@ -965,9 +971,9 @@ def _available_assistant_workflow(request: Request, manager) -> str:
 
 @router.get("/assistant/history")
 async def novel_assistant_history(workflow_id: str, workspace: str, request: Request):
-    mgr = _get_manager(request)
-    _available_assistant_workflow(request, mgr)
-    root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
+    from .humanware_routes import character_workspace
+    _available_assistant_workflow(request, _get_manager(request))
+    root = character_workspace(request, workflow_id, workspace)
     try:
         return {"entries": _assistant_jobs(request).history(root)}
     except ValueError as error:
@@ -977,6 +983,21 @@ async def novel_assistant_history(workflow_id: str, workspace: str, request: Req
 @router.post("/assistant")
 async def novel_assistant(payload: NovelAssistantRequest, request: Request):
     """Submit a durable analysis without tying model execution to a browser tab."""
+    if payload.purpose in CHARACTER_PURPOSES:
+        from .humanware_routes import character_workspace
+        try:
+            root = character_workspace(request, payload.workflow_id, payload.workspace,
+                                       mutate=True, history_dir=DATA_DIR / 'workflows')
+            jobs = _assistant_jobs(request)
+            existing = next((entry for entry in jobs.history(root) if entry['id'] == str(payload.request_id)), None)
+            if existing:
+                return {"success": True, "entry": existing}
+            data = payload.model_dump(mode="json", include={'purpose', 'chapter', 'question', 'character_id',
+                                     'section_id', 'character_ids', 'baseline', 'scene', 'expected_revision'})
+            data['_model_override'], data['_model_params'] = character_model(request, _get_manager(request), root, payload.purpose)
+            return {"success": True, "entry": jobs.start(root, str(payload.request_id), data)}
+        except (ValueError, OSError) as error:
+            raise HTTPException(409, str(error)) from error
     _ensure_http_mutation_allowed(request, payload.workflow_id)
     advisor_workflow = _available_assistant_workflow(request, _get_manager(request))
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
@@ -999,6 +1020,33 @@ async def novel_assistant(payload: NovelAssistantRequest, request: Request):
     except ValueError as error:
         raise HTTPException(503, str(error)) from error
     return {"success": True, "entry": entry}
+
+
+class TrialAccept(BaseModel):
+    workflow_id: str
+    workspace: str
+    entry_id: UUID
+    preferred: Literal['baseline', 'candidate']
+    reason: str = Field(min_length=1, max_length=2000)
+    carry_forward: str = Field(min_length=1, max_length=2000)
+
+
+@router.post('/assistant/trial-accept')
+async def accept_dialogue_trial(payload: TrialAccept, request: Request):
+    from .humanware_routes import character_workspace
+    from .novel_plugin import script_service
+    try:
+        root = character_workspace(request, payload.workflow_id, payload.workspace,
+                                   mutate=True, history_dir=DATA_DIR / 'workflows')
+        entries = _assistant_jobs(request).history(root)
+        entry = next((row for row in entries if row['id'] == str(payload.entry_id)), None)
+        if entry is None:
+            raise HTTPException(404, '该试读记录不存在。')
+        preference = script_service('character_center').accept_trial(
+            root, entry, payload.preferred, payload.reason, payload.carry_forward)
+        return {"status": "success", "preference": preference}
+    except (ValueError, OSError) as error:
+        raise HTTPException(409, str(error)) from error
 
 
 class PlotApply(BaseModel):

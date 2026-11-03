@@ -1,6 +1,7 @@
 """Voice adapter uses real workspace and enabled plugin resources, without models."""
 from pathlib import Path
 from types import SimpleNamespace
+import json
 import shutil
 
 import pytest
@@ -17,16 +18,22 @@ from src.web import humanware_routes
 def voice_client(tmp_path, monkeypatch):
     from src import config
     from src.workflow import script_library
+    from src.web import novel_plugin
     monkeypatch.setattr(config, 'BASE_DIR', tmp_path)
     monkeypatch.setattr(config, 'DATA_DIR', tmp_path / 'data')
     monkeypatch.setattr(humanware_routes, 'DATA_DIR', tmp_path / 'data', raising=False)
-    source = Path(__file__).resolve().parents[2] / 'DeterminFlow-Plugins/plugins/xs2-novel-flywheel/resources/script-library'
+    sibling = Path(__file__).resolve().parents[2]
+    source = next((sibling / name / 'plugins/xs2-novel-flywheel/resources/script-library'
+                   for name in ('plugins', 'DeterminFlow-Plugins')
+                   if (sibling / name / 'plugins/xs2-novel-flywheel').is_dir()))
     installed = tmp_path / 'installed'
     shutil.copytree(source / 'xs2/voice_support', installed / 'custom-xs2/voice_support')
     catalog = ScriptLibraryCatalog(tmp_path / 'scripts', [OwnedPath('xs2-novel-flywheel', installed)])
     monkeypatch.setattr(script_library, 'get_script_library', lambda: catalog)
+    monkeypatch.setattr(novel_plugin, 'get_script_library', lambda: catalog)
     manager = SimpleNamespace(_ws_manager=WorkspaceManager(str(tmp_path / 'data/workspaces')),
-        is_workflow_owner_enabled=lambda _: True, get_workflow_execution_policy=lambda _: 'public')
+        is_workflow_owner_enabled=lambda _: True, get_workflow_execution_policy=lambda _: 'public',
+        get_workflow_owner=lambda _: 'xs2-novel-flywheel')
     app = FastAPI()
     app.state.workflow_manager = manager
     app.include_router(humanware_routes.router)
@@ -156,3 +163,52 @@ def test_individual_voice_edit_respects_busy_and_owner_policy(voice_client, monk
     monkeypatch.setattr(humanware_routes, 'ensure_idle', busy)
     assert client.post('/api/humanware/voice-character', json=body).status_code == 409
     assert voice.read_text(encoding='utf-8') == '## 林木\n旧声音'
+
+
+def test_character_routes_check_owner_idle_and_plugin(voice_client, monkeypatch):
+    client, book, manager, catalog = voice_client
+    installed = catalog.resolve_file('custom-xs2', 'voice_support', 'voice_support.py').directory.parent
+    sibling = Path(__file__).resolve().parents[2]
+    source = next((sibling / name / 'plugins/xs2-novel-flywheel/resources/script-library/xs2'
+                   for name in ('plugins', 'DeterminFlow-Plugins')
+                   if (sibling / name / 'plugins/xs2-novel-flywheel').is_dir()))
+    for package in ('character_center', 'story_support', 'prose_policy'):
+        if (source / package).is_dir():
+            shutil.copytree(source / package, installed / package)
+    view = client.get('/api/humanware/characters', params=payload(book))
+    assert view.status_code == 200, view.text
+    assert view.json()['characters'][0]['status'] == 'legacy'
+    policy = client.get('/api/humanware/prose-policy', params=payload(book)).json()
+    save = payload(book, mode='narrative_led', expected_revision=policy['revision'])
+    with monkeypatch.context() as guard:
+        guard.setattr(manager, 'get_workflow_owner', lambda _: 'another-plugin')
+        assert client.post('/api/humanware/prose-policy', json=save).status_code == 400
+    with monkeypatch.context() as guard:
+        def busy(*_):
+            raise ValueError('workspace busy')
+        guard.setattr(humanware_routes, 'ensure_idle', busy)
+        response = client.post('/api/humanware/prose-policy', json=save)
+        assert response.status_code == 409 and 'workspace busy' in response.text
+    assert not (book / 'learning').exists()
+    assert client.post('/api/humanware/prose-policy', json=save).json()['mode'] == 'narrative_led'
+    assert client.get('/api/humanware/rule-audit', params=payload(book)).json()['chapter'] == '0001'
+    catalog.owner_enabled = lambda _: False
+    assert client.get('/api/humanware/characters', params=payload(book)).status_code == 409
+
+
+def test_assistant_history_get_projects_interruption_without_a_write(voice_client, monkeypatch):
+    from src.web import novel_routes
+    client, book, _, catalog = voice_client
+    target = book / 'learning/assistant-history.json'
+    target.parent.mkdir()
+    original = json.dumps({'entries': [{'id': 'interrupted', 'status': 'running', 'purpose': 'dialogue_trial'}]}).encode()
+    target.write_bytes(original)
+    installed = catalog.resolve_file('custom-xs2', 'voice_support', 'voice_support.py').directory.parent
+    source = Path(__file__).resolve().parents[2] / 'DeterminFlow-Plugins/plugins/xs2-novel-flywheel/resources/script-library/xs2'
+    shutil.copytree(source / 'console_service', installed / 'console_service')
+    monkeypatch.setattr(novel_routes, '_available_assistant_workflow', lambda *_: 'available')
+    client.app.include_router(novel_routes.router)
+    response = client.get('/api/novel-console/assistant/history', params=payload(book))
+    assert response.status_code == 200, response.text
+    assert response.json()['entries'][0]['error_code'] == 'interrupted'
+    assert target.read_bytes() == original

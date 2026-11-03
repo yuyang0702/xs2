@@ -25,14 +25,22 @@ def _load(path: str, signature: str):
 
 
 def console_service():
+    return script_service('console_service')
+
+
+def script_service(name):
     catalog = get_script_library()
     identity = next((item for item in catalog.list_scripts()
-                     if item['owner'] == OWNER and item['name'] == 'console_service'), None)
-    location = catalog.resolve_file(identity['group'], identity['name'], 'console_service.py') if identity else None
+                     if item['owner'] == OWNER and item['name'] == name), None)
+    filename = name + '.py'
+    location = catalog.resolve_file(identity['group'], identity['name'], filename) if identity else None
     if not location:
         raise ValueError('小说插件的工作台服务尚未加载，请检查插件状态并重新启动。')
-    path = location.directory / 'console_service.py'
-    signature = hashlib.sha256(b''.join(p.read_bytes() for p in sorted(location.directory.glob('*.py')))).hexdigest()
+    path = location.directory / filename
+    parts = [str(path).encode()]
+    for member in sorted(location.directory.glob('*.py')):
+        parts.extend((member.name.encode(), hashlib.sha256(member.read_bytes()).digest()))
+    signature = hashlib.sha256(b'\0'.join(parts)).hexdigest()
     return _load(str(path), signature)
 
 
