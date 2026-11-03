@@ -50,7 +50,7 @@ export default function SavedNovelProgress({ progress }: { progress: NovelProgre
     {stages.length > 0 && <details className="space-y-2 text-xs">
       <summary className="cursor-pointer font-medium">任务与节点记录 · {stages.length} 个步骤</summary>
       {stages.map(({ task, label, id }) => task && <article className="space-y-2 rounded-lg border border-border p-3" key={id}>
-        <h4 className="font-medium">{label} · {labels[task.status] || "状态待确认"}{task.elapsed_seconds != null ? " · 耗时 " + task.elapsed_seconds + " 秒" : ""}</h4>
+        <h4 className="font-medium">{label}{id === "export" ? "（全书）" : ""} · {labels[task.status] || "状态待确认"}{task.elapsed_seconds != null ? " · 耗时 " + task.elapsed_seconds + " 秒" : ""}</h4>
         <p className="break-all text-muted-foreground">任务 {task.task_id}</p>
         {task.reason && <p className="break-words text-destructive">{task.reason}</p>}
         {task.usage && <p className="break-words text-muted-foreground">

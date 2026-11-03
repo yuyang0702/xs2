@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CharacterCenterError, errorText, type CharacterApi, type CharacterPreview, type Job, type JobInput, type Person, type Preference, type Preferred, type Section } from "./api";
-import { box, button, Comparison, field, muted, primary, Problem, prose, useAction } from "./ui";
+import { box, button, Comparison, field, muted, primary, Problem, prose } from "./ui";
+import { useAction } from "./useAction";
 
 type JobProps = { api: CharacterApi; person: Person; chapter: string; revision: string; ready: boolean };
 type Ticket = { id: string; input: JobInput };

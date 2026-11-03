@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { errorText, type Audit, type CharacterApi, type Finding, type Override, type Policy, type PolicyMode } from "./api";
-import { box, button, Comparison, field, muted, primary, Problem, prose, useAction } from "./ui";
+import { box, button, Comparison, field, muted, primary, Problem, prose } from "./ui";
+import { useAction } from "./useAction";
 
 const status: Record<string, string> = { present: "可读", missing: "缺失", unavailable: "无法读取", candidate: "待作者核对" };
 const categories: Record<string, string> = { expression_advice: "表达建议", protected: "受保护内容", unknown: "类别待核对" };

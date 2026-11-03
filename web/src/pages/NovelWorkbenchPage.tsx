@@ -9,7 +9,8 @@ import { adoptNovelAdvisor, advisorMarkdown } from "../lib/novel-advisor";
 import NovelConfigurationSuggestions from "../components/NovelConfigurationSuggestions";
 import { applyAssistantConfiguration, premiseWithWorldDirection, type ConfigurationReceipt } from "../lib/novel-assistant-configuration";
 import NovelReferenceChoice, {referenceTitle} from "../components/NovelReferenceChoice";
-import { getNovelProgress, type NovelProgress } from "../lib/api";
+import type { NovelProgress } from "../lib/api";
+import { useNovelWorkspaceProgress } from "../hooks/useNovelWorkspaceProgress";
 import NovelManuscriptDownload from "../components/NovelManuscriptDownload";
 import NovelRepairPanel from "../components/NovelRepairPanel";
 import { beginReaderRepair } from "../lib/novel-repair-flow";
@@ -17,7 +18,7 @@ import { advanceRepairPlan } from "../lib/novel-repair-runner";
 import { getNovelReaderReport } from "../lib/api";
 import { applyNovelRepairPlan } from "../lib/api";
 import { getNovelAdoptedWriting, getNovelReferenceCandidates, type ReferenceChoice } from "../lib/api";
-import { novelEntryStage, canOpenNovelStage } from "../lib/novel-flow-entry";
+import { initialNovelWorkbenchView, novelEntryStage, canOpenNovelStage } from "../lib/novel-flow-entry";
 import { retainAdoptedWriting, toggleWriting, validateReferenceAdaptations } from "../lib/novel-writing-selection";
 import { nextNovelStageAfterReferenceAdoption } from "../lib/novel-continuation";
 import { nextSerialChapter, selectProductionChapter } from "../lib/novel-chapters";
@@ -242,7 +243,7 @@ function NovelWorkbenchContent() {
   const activeWorkspace = useRef(workspace);
   activeWorkspace.current = workspace;
   const [referenceStage, setReferenceStage] = useState("adopt-reference");
-  const [view, setView] = useState<View>(() => new URLSearchParams(window.location.search).get("view") === "flow" ? "flow" : "home");
+  const [view, setView] = useState<View>(() => initialNovelWorkbenchView(window.location.search));
   const [reviewChapter, setReviewChapter] = useState("");
   const [chapterOpening, setChapterOpening] = useState(false);
   const chapterOpeningGuard = useRef(false);
@@ -754,15 +755,7 @@ function HomeView({ chapterOpening, nextChapter, onNextChapter, project, project
   onSettings: (item: { workspace: string; state: Partial<Project>; progress?: NovelProgress }) => void;
   onDeleteProject: (workspace: string) => Promise<void>;
 }) {
-  const [progress, setProgress] = useState<NovelProgress | null>(null);
-  const [progressError, setProgressError] = useState("");
-  useEffect(() => {
-    let active = true;
-    const refresh = async () => { try { const result = await getNovelProgress(workflowId("build"), currentWorkspace); if (active) { setProgress(result); setProgressError(""); } } catch (failure) { if (active) setProgressError(failure instanceof Error ? failure.message : "读取进度失败"); } };
-    setProgress(null); void refresh();
-    const timer = window.setInterval(() => void refresh(), 4000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [currentWorkspace]);
+  const { progress, progressError } = useNovelWorkspaceProgress(workflowId("build"), currentWorkspace);
   const totalChars = chapters.reduce((sum, item) => sum + (item.file.character_count ?? 0), 0);
   return <div className="space-y-6">
     <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary">XS2 小说工作台</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">我的作品</h1><p className="mt-2 text-sm text-muted-foreground">作品设置、创作进度和小说档案都绑定在独立工作区中。</p></div><div className="flex gap-2"><button onClick={() => onNew("short")} className="rounded-xl border border-border px-4 py-2.5 text-sm">新建短篇</button><button onClick={() => onNew("serial")} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">新建长篇连载</button></div></div>

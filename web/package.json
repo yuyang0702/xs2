@@ -17,7 +17,7 @@
     "test:desktop": "tsx --test src/lib/account.test.ts src/lib/dialog-controller.test.ts src/lib/desktop-update.test.ts src/lib/skill-marketplace.test.ts src/lib/marketplace-skill-update.test.ts src/lib/marketplace-bridge*.test.ts src/lib/marketplace-install.test.ts src/lib/marketplace-navigation.test.ts src/lib/marketplace-submissions.test.ts",
     "test:graph": "tsx --test src/lib/graph-api.test.ts",
     "test:onboarding": "tsx --test src/components/onboarding/*.test.ts",
-    "test:novel": "tsx --test src/components/CharacterCenterPanel.test.ts src/components/CharacterVoiceEditor.test.ts src/lib/novel-task-progress.test.ts",
+    "test:novel": "tsx --test src/components/CharacterCenterPanel.test.ts src/components/CharacterVoiceEditor.test.ts src/lib/novel-task-progress.test.ts src/hooks/useNovelWorkspaceProgress.test.ts",
     "test:design": "tsx --test src/lib/design-contract.test.ts",
     "test": "npm run test:extensions && npm run test:workflow && npm run test:conversation && npm run test:settings && npm run test:desktop && npm run test:graph && npm run test:onboarding && npm run test:design && npm run test:novel",
     "preview": "vite preview"

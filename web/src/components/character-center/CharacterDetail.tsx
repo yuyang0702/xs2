@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { errorText, type CharacterApi, type CharacterPreview, type CharacterState, type HistoryEntry, type Inventory, type Person, type Section } from "./api";
 import { FieldSuggestion, SceneTrial } from "./CharacterAssistant";
-import { box, button, Comparison, field, muted, primary, Problem, prose, useAction } from "./ui";
+import { box, button, Comparison, field, muted, primary, Problem, prose } from "./ui";
+import { useAction } from "./useAction";
 
 const tabs = [
   ["overview", "概况"], ["motivation", "性格与动机"], ["relationships", "关系"], ["voice", "声线"],
@@ -217,7 +218,7 @@ function Proof({ source_chapter, source_id, evidence }: Pick<CharacterState, "so
   </blockquote>;
 }
 function StateCard({ state }: { state: CharacterState }) {
-  const { knowledge: _knowledge, misbelief: _misbelief, ...snapshot } = state.snapshot;
+  const snapshot = Object.fromEntries(Object.entries(state.snapshot).filter(([key]) => key !== "knowledge" && key !== "misbelief"));
   return <article className={box}>
     <h4 className="font-medium">第 {Number(state.chapter)} 章确认记录</h4>
     <Facts values={snapshot} /><Facts values={state.drives} />

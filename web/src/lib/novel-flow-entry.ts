@@ -23,3 +23,7 @@ export function novelEntryStage(project: EntryProject, stages: Array<{id: string
 export function canOpenNovelStage(id: string, current: string, completed: string[], busy: boolean) {
   return !busy && (id === 'novel-advisor' || id === current || completed.includes(id));
 }
+export function initialNovelWorkbenchView(search: string): "flow" | "humanware" | "home" {
+  const view = new URLSearchParams(search).get("view");
+  return view === "flow" || view === "humanware" ? view : "home";
+}
