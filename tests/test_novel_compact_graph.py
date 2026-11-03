@@ -22,6 +22,7 @@ RESOURCE_ROOT = Path(__file__).resolve().parents[2] / "DeterminFlow-Plugins/plug
 pytestmark = pytest.mark.skipif(not RESOURCE_ROOT.is_dir(), reason="Sibling xs2 novel plugin checkout is unavailable")
 
 WORLD_AGENTS = ["agent_corelaws", "agent_spacetime", "agent_society", "agent_historyculture", "agent_existence", "agent_information"]
+CHARACTER_REVIEW = "agent_card_semantic_review"
 CHARACTER_AGENTS = ["agent_skeleton", "agent_belief", "agent_deep", "agent_deep", "agent_voice"]
 MVP_PREP_AGENTS = {"agent_we", "agent_id", "agent_od", "agent_cm", "agent_se", "agent_trimmer"}
 MVP_MULTI_AGENTS = {"agent_nw", "agent_aw", "agent_dw", "agent_dsw", "agent_iw", "agent_tw", "agent_si"}
@@ -73,17 +74,18 @@ def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None]):
     ("build", "agent_short_world", "script_short_world", WORLD_AGENTS),
     ("character", "agent_short_character", "script_short_character", CHARACTER_AGENTS),
 ])
-def test_short_compact_preparation_executes_one_agent_and_skips_full_path(monkeypatch, workflow, compact_agent, compact_script, standard_agents):
+def test_short_compact_preparation_runs_compact_path_and_required_review(monkeypatch, workflow, compact_agent, compact_script, standard_agents):
     task, calls, agents = _run_graph(monkeypatch, workflow, {
         "preparation_mode": "compact", "conflict_plan_mode": "short_full", "character_names": "invalid-list-must-not-be-evaluated",
     })
-    assert agents == [compact_agent]
+    expected = [compact_agent, CHARACTER_REVIEW] if workflow == "character" else [compact_agent]
+    assert agents == expected
     assert compact_script in calls
     assert all(task.node_states[node].status == "skipped" for node in set(standard_agents))
     assert not task.control_flow_state.get("loops")
 
 
-@pytest.mark.parametrize("workflow,expected_agents", [("build", WORLD_AGENTS), ("character", CHARACTER_AGENTS)])
+@pytest.mark.parametrize("workflow,expected_agents", [("build", WORLD_AGENTS), ("character", [*CHARACTER_AGENTS, CHARACTER_REVIEW])])
 @pytest.mark.parametrize("values", [
     {},
     {"preparation_mode": "compact"},
