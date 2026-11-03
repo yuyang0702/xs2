@@ -1,6 +1,6 @@
 """Transport adapter for the enabled novel plugin's adviser service."""
 import asyncio
-from src.core.llm_client import create_llm
+from src.core.request_llm import create_request_llm as create_llm
 from .novel_story_support import story_support
 from .novel_plugin import console_service
 

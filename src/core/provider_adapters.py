@@ -173,6 +173,10 @@ def _build_anthropic_params(params: dict[str, Any], provider: dict) -> dict:
             }
 
     effort = params.get("reasoning_effort")
+    # A workflow may retain another provider's disabled-thinking sentinel when
+    # its model changes. Anthropic expresses that choice through `thinking`.
+    if thinking_enabled is False and effort == "none":
+        effort = None
     allowed_efforts = {"low", "medium", "high", "xhigh", "max"}
     if effort is not None:
         if effort not in allowed_efforts:

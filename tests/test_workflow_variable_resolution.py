@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 
 import pytest
 
@@ -64,7 +65,12 @@ def test_workflow_file_path_rejects_symlink_escape(tmp_path):
     outside = tmp_path / "outside"
     workspace.mkdir()
     outside.mkdir()
-    (workspace / "linked").symlink_to(outside, target_is_directory=True)
+    try:
+        (workspace / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        if sys.platform == "win32" and getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is unavailable")
+        raise
 
     with pytest.raises(ValueError, match="越出 workspace"):
         resolve_workspace_file_path(workspace, "linked/output.json")

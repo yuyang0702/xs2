@@ -657,6 +657,7 @@ def test_agent_node_rejects_mid_task_execution_identity_drift(
     definition = WorkflowDef(
         workflow_id=workflow_id,
         nodes=[node],
+        variables=[WorkflowVariable(key="model_id")],
     )
     _write_workflow(workflows_dir, definition)
     manager = WorkflowManager(session_manager)

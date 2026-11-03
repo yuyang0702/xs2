@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 
 from src.config import WORKFLOW_NODE_TIMEOUT_SECONDS
@@ -65,6 +66,14 @@ class AgentNode(BaseNodePlugin):
                 "required": True,
                 "default": "",
                 "description": "发送给 Agent 的第一条消息（任务描述），支持 {{key}} 占位符",
+            },
+            {
+                "key": "first_message_source_variable",
+                "label": "首条消息来源变量",
+                "type": "text",
+                "required": False,
+                "default": "",
+                "description": "可选变量名；变量非空时通过现有变量渲染作为首条消息，空值时保留原首条消息",
             },
             {
                 "key": "auto_flow",
@@ -191,7 +200,27 @@ class AgentNode(BaseNodePlugin):
         shared_ws = str(ctx.shared_ws) if ctx.shared_ws else ""
         resolved_agent_type = await resolve_placeholders(node_def.agent_type, pv, variables, shared_ws)
         resolved_system_prompt = await resolve_placeholders(node_def.system_prompt_template, pv, variables, shared_ws)
-        resolved_first_message = await resolve_placeholders(node_def.first_message, pv, variables, shared_ws)
+        first_message = node_def.first_message
+        source_key = (node_def.node_params or {}).get("first_message_source_variable", "")
+        selected_source = False
+        if source_key not in (None, ""):
+            if not isinstance(source_key, str) or not re.fullmatch(r"[\w.-]+", source_key):
+                return NodeResult(status="failed", error="first_message_source_variable 必须是有效变量名")
+            if source_key not in pv:
+                return NodeResult(status="failed", error=f"first_message_source_variable 未提供变量: {source_key}")
+            source_value = pv[source_key]
+            if source_value is not None and (not isinstance(source_value, str) or source_value.strip()):
+                first_message = "{{" + source_key + "}}"
+                selected_source = True
+        if selected_source:
+            try:
+                resolved_first_message = await resolve_placeholders(first_message, pv, variables, shared_ws)
+            except (ValueError, OSError) as exc:
+                return NodeResult(status="failed", error=f"first_message_source_variable 无法渲染: {exc}")
+            if not resolved_first_message.strip():
+                return NodeResult(status="failed", error="first_message_source_variable 渲染结果为空")
+        else:
+            resolved_first_message = await resolve_placeholders(first_message, pv, variables, shared_ws)
 
         # 读取节点配置
         auto_flow = getattr(node_def, "auto_flow", False)
@@ -529,6 +558,16 @@ class AgentNode(BaseNodePlugin):
         # 从 session 读取累计 token 消耗
         node_token_usage = self._get_session_token_usage(sm, session_id)
 
+        selected_output, selection_error = self._select_output(
+            sm, session_id, node_def.node_params,
+        ) if completion_result["status"] == "success" else ("", "")
+        if selection_error:
+            return NodeResult(
+                status="failed", error=f"LLM 输出选择失败: {selection_error}",
+                session_id=session_id, outputs={}, token_usage=node_token_usage,
+                token_usage_calls=self._get_session_token_usage_calls(sm, session_id),
+            )
+
         validation_enabled = bool(
             require_non_empty_output
             or json_output_field
@@ -536,7 +575,7 @@ class AgentNode(BaseNodePlugin):
         )
         validated_output = ""
         if completion_result["status"] == "success" and validation_enabled:
-            validated_output = self._get_latest_ai_message(sm, session_id)
+            validated_output = selected_output
             validation = validate_agent_output(
                 validated_output,
                 require_non_empty=require_non_empty_output,
@@ -567,7 +606,7 @@ class AgentNode(BaseNodePlugin):
         if output_var_key and completion_result["status"] == "success":
             last_msg = (
                 validated_output if validation_enabled
-                else self._get_latest_ai_message(sm, session_id)
+                else selected_output
             )
             if last_msg:
                 outputs[output_var_key] = last_msg
@@ -577,7 +616,7 @@ class AgentNode(BaseNodePlugin):
             last_msg_for_file = outputs.get(output_var_key) if output_var_key else \
                 (
                     validated_output if validation_enabled
-                    else self._get_latest_ai_message(sm, session_id)
+                    else selected_output
                 )
             if last_msg_for_file:
                 try:
@@ -712,6 +751,14 @@ class AgentNode(BaseNodePlugin):
             return session
         getter = getattr(sm, "get_session", None)
         return getter(session_id) if callable(getter) else None
+
+    @staticmethod
+    def _select_output(sm, session_id: str, node_params: dict | None) -> tuple[str, str]:
+        from src.workflow.output_selection import select_agent_output
+
+        session = AgentNode._resolve_session(sm, session_id)
+        record = session.record if session else []
+        return select_agent_output(record, node_params or {})
 
     @staticmethod
     def _get_latest_ai_message(sm, session_id: str) -> str:

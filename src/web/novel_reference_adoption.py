@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from src.core.llm_client import create_llm
+from src.core.request_llm import create_request_llm as create_llm
 from src.workflow.script_library import get_script_library
 from .novel_plugin import console_service, OWNER
 from .novel_library import enrich_candidates

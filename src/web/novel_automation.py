@@ -203,8 +203,14 @@ class NovelAutomation:
             self._save(root, state)
         elif parameters != intent["parameters"]:
             raise ValueError("待启动任务的参数发生变化，请检查后重新启用。")
-        created = self.manager.create_task(workflow_id, parameter_values=parameters, workspace_override=str(root),
-                                           node_model_overrides=policy.model_overrides(state, definition, stage))
+        task_options = {"parameter_values": parameters, "workspace_override": str(root),
+                        "node_model_overrides": policy.model_overrides(state, definition, stage)}
+        params_policy = getattr(policy, "model_params_overrides", None)
+        if callable(params_policy):
+            params_overrides = params_policy(state, definition, stage)
+            if params_overrides is not None:
+                task_options["node_model_params_overrides"] = params_overrides
+        created = self.manager.create_task(workflow_id, **task_options)
         if not created or not created.get("task_id") or created.get("success") is False:
             raise ValueError((created or {}).get("message") or "创建任务失败，自动创作已暂停。")
         ref = {"workflow_id": workflow_id, "task_id": created["task_id"]}

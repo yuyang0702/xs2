@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import os
@@ -21,6 +22,7 @@ import signal
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from .base import BaseNodePlugin, NodeContext, NodeResult
@@ -54,6 +56,32 @@ _INTERPRETER_MAP = {"shell": "bash", "python": sys.executable}
 
 # stdout/stderr 最大保留字节数
 _MAX_OUTPUT_BYTES = 50 * 1024  # 50KB
+
+# Optional runtime-variable stdin is bounded independently of captured output.
+_MAX_STDIN_BYTES = 8 * 1024 * 1024
+
+
+def _encode_script_stdin(value: object) -> bytes:
+    """Encode exact text or strict JSON data without exposing it in errors."""
+    def validate(item: object) -> None:
+        if item is None or isinstance(item, (str, bool, int, float)):
+            return
+        if isinstance(item, list):
+            for child in item:
+                validate(child)
+            return
+        if isinstance(item, dict) and all(isinstance(key, str) for key in item):
+            for child in item.values():
+                validate(child)
+            return
+        raise ValueError("Unsupported JSON value")
+
+    validate(value)
+    text = value if isinstance(value, str) else json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        allow_nan=False,
+    )
+    return text.encode("utf-8")
 
 
 def _descendant_pids(root_pid: int) -> list[int]:
@@ -298,6 +326,31 @@ class ScriptNode(BaseNodePlugin):
         pv = ctx.parameter_values
         node_params = node_def.node_params or {}
 
+        stdin_bytes = None
+        if "script_stdin_variable" in node_params:
+            stdin_variable = node_params["script_stdin_variable"]
+            if (
+                not isinstance(stdin_variable, str)
+                or not stdin_variable
+                or stdin_variable not in pv
+            ):
+                return NodeResult(
+                    status="failed",
+                    error="script_stdin_variable 必须选择已有的变量名",
+                )
+            try:
+                stdin_bytes = _encode_script_stdin(pv[stdin_variable])
+            except (TypeError, ValueError, RecursionError, OverflowError):
+                return NodeResult(
+                    status="failed",
+                    error="script_stdin_variable 值必须是有效的 UTF-8 文本或 JSON 数据",
+                )
+            if len(stdin_bytes) > _MAX_STDIN_BYTES:
+                return NodeResult(
+                    status="failed",
+                    error="script_stdin_variable 输入超过 8 MiB 上限",
+                )
+
         # 读取配置
         script_source = node_params.get("script_source", "inline")
         script_type = node_params.get("script_type", "shell")
@@ -511,8 +564,14 @@ class ScriptNode(BaseNodePlugin):
         )
 
         process: asyncio.subprocess.Process | None = None
+        stdin_file = None
         try:
             subprocess_options = {}
+            if stdin_bytes is not None:
+                stdin_file = tempfile.TemporaryFile(mode="w+b")
+                stdin_file.write(stdin_bytes)
+                stdin_file.seek(0)
+                subprocess_options["stdin"] = stdin_file
             if sys.platform == "win32":
                 subprocess_options["creationflags"] = (
                     getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
@@ -555,6 +614,9 @@ class ScriptNode(BaseNodePlugin):
             if process is not None:
                 await _terminate_process_tree(process)
             raise
+        finally:
+            if stdin_file is not None:
+                stdin_file.close()
 
         assert process is not None
         exit_code = process.returncode
