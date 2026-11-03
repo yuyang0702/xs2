@@ -39,6 +39,34 @@ def test_progress_forwards_bound_task_and_measured_usage_only(tmp_path):
     assert result == {'result': 'projected'}
 
 
+def test_archived_chapter_keeps_usage_for_the_displayed_bookwide_export(tmp_path):
+    root = tmp_path / 'book'
+    root.mkdir()
+    flows = tmp_path / 'workflows'
+    workflow = flows / 'custom-export'
+    folder = workflow / 'tasks'
+    folder.mkdir(parents=True)
+    (workflow / '.extension.json').write_text(json.dumps({'owner': 'xs2-novel-flywheel', 'local_id': 'export'}))
+    for task_id, chapter, calls in [('current-export', '', [31]), ('archived-export', '0001', [8, 13])]:
+        task = {'workflow_id': workflow.name, 'task_id': task_id, 'workspace_override': str(root),
+                'parameter_values': {'chapter_number': chapter}, 'status': 'completed',
+                'node_states': {'exporter': {'status': 'completed', 'token_usage_calls': [
+                    {'call_id': f'{task_id}-{index}', 'model_id': f'fixture:{task_id}', 'total_tokens': total}
+                    for index, total in enumerate(calls)
+                ]}}}
+        (folder / f'{task_id}.json').write_text(json.dumps(task))
+    state = {'values': {'chapter_number': '0002'},
+             'refs': {'export': {'workflow_id': workflow.name, 'task_id': 'current-export'}}}
+
+    def project(_book, _manifest, tasks, usages, **_options):
+        return {'task_id': tasks['export']['task_id'], 'usage': usages['export']}
+
+    result = progress(root, state, flows, chapter='0001',
+                      service=SimpleNamespace(project_progress=project, chapter_id=lambda value: value.zfill(4)))
+    assert result == {'task_id': 'current-export', 'usage': {'basis': 'ledger',
+        'models': ['fixture:current-export'], 'total_tokens': 31, 'call_count': 1}}
+
+
 def test_progress_route_checks_owner_and_never_resolves_invalid_workspace(tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

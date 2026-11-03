@@ -68,6 +68,8 @@ def progress(root, state, workflows_dir, *, chapter='', include_details=True, se
         current = service.chapter_id(state.get('values', {}).get('chapter_number', '1')) or '0001'
         if selected and selected != current:
             archived = chapter_tasks(root, workflows, selected)
+            # Progress uses the book-wide export reference on every chapter.
+            archived.pop('export', None)
     if include_details:
         for stage, task in (tasks | archived).items():
             if task.get('workspace_override') and (usage := _measured_usage(task)):
