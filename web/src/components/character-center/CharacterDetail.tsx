@@ -110,7 +110,8 @@ export default function CharacterDetail({ person, inventory, api, ready, actionC
             <button className={button} disabled={action.busy} onClick={() => { setEdit(null); setReceipt(null); setError(""); }}>取消编辑</button>
           </div>
           {section.ai_editable && <FieldSuggestion key={section.id} api={api} person={person} section={section} chapter={actionChapter}
-            revision={revision} ready={available} onUse={value => {
+            revision={revision} ready={available} onSelectionChange={() => setReceipt(value => value?.assistant_source ? null : value)}
+            onUse={value => {
               if (value.section_id !== section.id || value.source_id !== section.source_id || value.character_id !== person.id) return;
               setEdit({ sectionId: section.id, text: value.after }); setReceipt(value); setError(""); setNotice("");
             }} />}

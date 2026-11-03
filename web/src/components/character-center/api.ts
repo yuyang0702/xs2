@@ -61,10 +61,15 @@ export type JobInput = {
   chapter: string; expected_revision: string; question: string;
 } & ({ purpose: "character_edit"; character_id: string; section_id: string }
   | { purpose: "dialogue_trial"; character_ids: string[]; baseline: string; scene: string });
+export type JobSource = {
+  chapter: string; revision: string; character_ids: string[];
+  character_id?: string; section_id?: string; source_id?: string; scene?: string;
+};
 export type Job = {
   id: string; purpose: JobInput["purpose"]; chapter: string; status: "running" | "completed" | "failed";
   created_at: string; finished_at?: string; attempt?: number; message?: string; error_code?: string;
   model?: string; elapsed_seconds?: number; stale?: boolean; suggestion?: CharacterPreview; trial?: Trial;
+  character_source?: JobSource;
 };
 
 export class CharacterCenterError extends Error {

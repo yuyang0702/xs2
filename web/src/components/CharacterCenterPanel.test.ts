@@ -44,7 +44,8 @@ async function mount() {
     return await handle(url, body) ?? (
       url.pathname.endsWith("/characters")
         ? json({ ...profile, chapter: url.searchParams.get("chapter") || "0001" })
-        : url.pathname.endsWith("/character-history") ? json({ entries: [] }) : json({ detail: "unexpected request" }, 404));
+        : url.pathname.endsWith("/character-history") || url.pathname.endsWith("/assistant/history")
+          ? json({ entries: [] }) : json({ detail: "unexpected request" }, 404));
   };
   const host = document.createElement("div");
   document.body.append(host);
@@ -203,4 +204,73 @@ test("trial acceptance displays an unmatched production binding and sends author
   assert.doesNotMatch(text(), /后续生成可读取/);
   assert.deepEqual(mutations[1].body, { workspace, workflow_id: "character", entry_id: mutations[0].body.request_id,
     preferred: "candidate", reason: "行动更清楚", carry_forward: "先写动作" });
+});
+async function chooseJob(id: string) {
+  const select = document.querySelector<HTMLSelectElement>('[aria-label="已保存的助手任务"]');
+  assert.ok(select, "missing saved assistant tasks");
+  assert.ok([...select.options].some(option => option.value === id), "missing scoped task " + id);
+  await act(async () => { select.value = id; select.dispatchEvent(new Event("change", { bubbles: true })); });
+}
+
+test("returning to a trial resumes the selected saved job and never submits a new model request", async () => {
+  const source = { chapter: "0001", revision: "a", character_ids: ["a", "b"], scene: "井口核对" };
+  const saved = { id: "resumable", purpose: "dialogue_trial", chapter: "0001", status: "running",
+    created_at: "2026-11-04T00:00:00Z", character_source: source };
+  let completed = false;
+  handle = url => {
+    if (!url.pathname.endsWith("/assistant/history")) return;
+    assert.equal(url.searchParams.get("workspace"), workspace);
+    const wrongChapter = { ...saved, id: "wrong-chapter", chapter: "0002", character_source: { ...source, chapter: "0002" } };
+    const wrongCast = { ...saved, id: "wrong-person", character_source: { ...source, character_ids: ["b"] } };
+    const active = completed ? { ...saved, status: "completed", trial: { chapter: source.chapter,
+      character_ids: source.character_ids, scene: source.scene, baseline: "纸已放在台上。",
+      candidate: "许青把纸放在台上。", checks: ["保留纸的位置"] } } : saved;
+    const other = { ...saved, id: "other-same-scope", status: "completed", trial: {
+      chapter: source.chapter, character_ids: source.character_ids, scene: source.scene,
+      baseline: "旧原文", candidate: "另一项任务的结果", checks: [],
+    } };
+    return json({ entries: [wrongChapter, wrongCast, other, active] });
+  };
+  await mount();
+  await click("场景试读");
+  await click("概况");
+  await click("场景试读");
+  await chooseJob("resumable");
+  assert.match(text(), /任务进行中/);
+  assert.match(text(), /井口核对/);
+  assert.doesNotMatch(document.querySelector('[aria-label="已保存的助手任务"]')?.innerHTML || "", /wrong-chapter|wrong-person/);
+  completed = true;
+  await act(async () => new Promise(resolve => setTimeout(resolve, 900)));
+  assert.match(text(), /许青把纸放在台上。/);
+  assert.doesNotMatch(text(), /另一项任务的结果/);
+  assert.match(text(), /许青、许宁/);
+  assert.equal(mutations.length, 0);
+  assert.ok(button("确认并保存表达偏好")?.disabled);
+});
+
+test("saved suggestions are available only for the exact field and require explicit preview selection", async () => {
+  const source = { chapter: "0001", revision: "a", character_ids: ["a"],
+    character_id: "a", section_id: section.id, source_id: section.source_id };
+  const saved = { id: "field-job", purpose: "character_edit", chapter: "0001", status: "completed",
+    created_at: "2026-11-04T00:00:00Z", character_source: source, suggestion: { ...receipt, assistant_source: source } };
+  handle = url => url.pathname.endsWith("/assistant/history") ? json({ entries: [
+    { ...saved, id: "wrong-field", character_source: { ...source, section_id: "other" } },
+    { ...saved, id: "wrong-person", character_source: { ...source, character_id: "b", character_ids: ["b"] } },
+    { ...saved, id: "wrong-chapter", chapter: "0002", character_source: { ...source, chapter: "0002" } },
+    { ...saved, id: "stale-field", stale: true },
+    saved,
+  ] }) : undefined;
+  await mount();
+  await click("声线");
+  await click("编辑表达倾向");
+  await chooseJob("field-job");
+  assert.doesNotMatch(document.querySelector('[aria-label="已保存的助手任务"]')?.innerHTML || "", /wrong-field|wrong-person|wrong-chapter/);
+  assert.equal(button("确认修改"), undefined);
+  await click("采用为修改预览");
+  assert.ok(button("确认修改"));
+  await chooseJob("stale-field");
+  assert.match(text(), /本次结果的依据已变化/);
+  assert.equal(button("确认修改"), undefined);
+  assert.equal(button("采用为修改预览"), undefined);
+  assert.equal(mutations.length, 0);
 });

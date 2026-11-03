@@ -127,7 +127,7 @@ function CharacterCenter({ workspace, workflowId, progressWorkflowId, currentCha
           </details>)}
         </details>}
       </aside>
-      {person && inventory && <CharacterDetail key={JSON.stringify([person.id, shownChapter])} person={person} inventory={inventory}
+      {person && inventory && <CharacterDetail key={JSON.stringify([person.id, shownChapter, actionChapter])} person={person} inventory={inventory}
         ready={active} api={api} actionChapter={actionChapter} roster={roster}
         lifecycle={progressWorkflowId && <SelectedChapterLifecycle key={actionChapter + ":" + refresh} workflowId={progressWorkflowId}
           workspace={workspace} chapter={actionChapter} />}
