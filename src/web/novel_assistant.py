@@ -50,10 +50,16 @@ def character_model(request, manager, root, purpose):
     state = json.loads(manifest.read_text(encoding='utf-8-sig')) if manifest.is_file() else {}
     if not isinstance(state, dict) or not isinstance(state.get('values', {}), dict):
         raise ValueError('作品模型设置格式无效。')
-    node_id = 'agent_voice' if stage == 'character' else (
-        'agent_nw' if state.get('values', {}).get('writer_type') == 'muti' else 'agent_sw')
-    models = get_model_manager()
     production = console_service().production
+    writer_type = state.get('values', {}).get('writer_type')
+    choose_writer = getattr(production, 'dialogue_writer_node', None)
+    if stage == 'character':
+        node_id = 'agent_voice'
+    elif choose_writer is not None:
+        node_id = choose_writer(definition, writer_type)
+    else:
+        node_id = 'agent_nw' if writer_type == 'muti' else 'agent_sw'
+    models = get_model_manager()
     overrides = production.model_overrides(state, definition, stage) or {}
     if node_id in overrides:
         apply_node_model_overrides(definition, {node_id: overrides[node_id]}, model_manager=models)

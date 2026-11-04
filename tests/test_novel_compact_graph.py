@@ -28,7 +28,7 @@ MVP_PREP_AGENTS = {"agent_we", "agent_id", "agent_od", "agent_cm", "agent_se", "
 MVP_MULTI_AGENTS = {"agent_nw", "agent_aw", "agent_dw", "agent_dsw", "agent_iw", "agent_tw", "agent_si"}
 
 
-def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None]):
+def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None], reject_at=""):
     data = json.loads((RESOURCE_ROOT / workflow / "definition.json").read_text(encoding="utf-8"))
     definition = WorkflowDef.from_dict(data)
     original_types = {node.id: node.node_type for node in definition.nodes}
@@ -39,6 +39,10 @@ def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None]):
 
         async def execute(self, ctx: NodeContext) -> NodeResult:
             calls.append(ctx.node_def.id)
+            if reject_at and ctx.node_def.id == reject_at and calls.count(ctx.node_def.id) == 1:
+                response = ctx.on_reject_upstream("test", "[scene_duplicate] fixture overlap", "agent_dw")
+                assert response["success"]
+                return NodeResult(status="failed", error="fixture overlap")
             outputs = {"character_names": '["阿禾", "小岚"]'} if ctx.node_def.id == "script_extract" else {}
             return NodeResult(status="completed", summary=ctx.node_def.id, outputs=outputs)
 
@@ -61,11 +65,20 @@ def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None]):
 
     monkeypatch.setattr(engine, "_save_task_state", no_save)
     monkeypatch.setattr(engine, "_push_wf_task_update", lambda *_args: None)
-    outcome = asyncio.run(engine._execute_plan_segment(
-        definition=definition, task=task, execution_plan=definition.get_execution_plan(),
-        disabled_ids=set(), shared_ws=None, parent_id="test-main", on_node_started=lambda _state: None,
-        needs_approval=False, run_record=WorkflowRunRecord(workflow_id=definition.workflow_id),
-    ))
+    async def execute():
+        return await engine._execute_plan_segment(
+            definition=definition, task=task, execution_plan=definition.get_execution_plan(),
+            disabled_ids=set(), shared_ws=None, parent_id="test-main", on_node_started=lambda _state: None,
+            needs_approval=False, run_record=WorkflowRunRecord(workflow_id=definition.workflow_id),
+        )
+
+    outcome = asyncio.run(execute())
+    if reject_at:
+        from src.workflow.failure_policy import activate_scheduled_retry
+        assert outcome == "retry_waiting"
+        assert "script_render_si" not in calls
+        task.node_states["agent_dw"] = activate_scheduled_retry(task.node_states["agent_dw"])
+        outcome = asyncio.run(execute())
     assert outcome == "completed"
     return task, calls, [node for node in calls if original_types[node] == "agent"]
 
@@ -114,7 +127,7 @@ def test_compact_single_chapter_keeps_common_context_writer_and_quality_tail(mon
     {"preparation_mode": "full", "writer_type": "single"},
     {"preparation_mode": "compact", "conflict_plan_mode": "serial_arc", "writer_type": "single"},
     {"preparation_mode": "compact", "chapter_number": "0002", "writer_type": "single"},
-    {"preparation_mode": "compact", "writer_type": "muti"},
+    {"preparation_mode": "compact", "conflict_plan_mode": "serial_arc", "writer_type": "muti"},
 ])
 def test_mvp_defaults_later_chapters_and_multi_writer_preserve_standard_path(monkeypatch, values):
     task, calls, agents = _run_graph(monkeypatch, "mvp", {"conflict_plan_mode": "short_full", "chapter_number": "0001", **values})
@@ -128,3 +141,27 @@ def test_mvp_defaults_later_chapters_and_multi_writer_preserve_standard_path(mon
     else:
         assert agents.count("agent_sw") == 1
         assert not (MVP_MULTI_AGENTS & set(agents))
+
+
+def test_compact_multi_writer_validates_assembly_before_publication(monkeypatch):
+    task, calls, agents = _run_graph(monkeypatch, "mvp", {
+        "preparation_mode": "compact", "conflict_plan_mode": "short_full", "chapter_number": "0001", "writer_type": "muti",
+    })
+    assert set(agents) == MVP_MULTI_AGENTS
+    assert all(task.node_states[node].status == "skipped" for node in MVP_PREP_AGENTS | {"agent_sw"})
+    assert calls.index("script_short_context") < calls.index("script_multi_prepare") < calls.index("agent_nw")
+    assert calls.index("agent_nw") < calls.index("script_multi_plan")
+    assembly = calls.index("script_multi_assemble")
+    assert all(calls.index(writer) < assembly for writer in MVP_MULTI_AGENTS)
+    assert assembly < calls.index("script_si_post") < calls.index("script_render_si")
+
+
+@pytest.mark.parametrize("gate", ["script_multi_scene_2", "script_multi_assemble"])
+def test_compact_multi_retries_only_rejected_scene_and_then_reaches_publication(monkeypatch, gate):
+    task, calls, _agents = _run_graph(monkeypatch, "mvp", {
+        "preparation_mode": "compact", "conflict_plan_mode": "short_full", "chapter_number": "0001", "writer_type": "muti",
+    }, reject_at=gate)
+    assert calls.count("agent_dw") == calls.count(gate) == 2
+    assert all(calls.count(writer) == 1 for writer in MVP_MULTI_AGENTS - {"agent_dw"})
+    assert calls.count("script_render_si") == 1
+    assert task.node_states["agent_dw"].attempt_count == 2
