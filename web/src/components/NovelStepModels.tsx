@@ -65,7 +65,7 @@ export default function NovelStepModels({ workflowId, task, disabled, onPendingC
   return <section className="novel-model-panel mt-5 rounded-xl border border-border bg-secondary/20 p-4" aria-label="当前步骤模型" aria-busy={loading || saving}>
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex min-w-0 items-start gap-2.5"><Cpu className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><div>
-        <p className="text-xs font-medium text-muted-foreground">后续任务模型</p>
+        <p className="text-xs font-medium text-muted-foreground">步骤默认模型</p>
         <p className="mt-1 break-words text-sm font-medium">{loading ? "正在读取工作流模型…" : settings?.nodes.length === 0 ? "此步骤无需大模型" : effective.length > 1 ? `按角色使用 ${effective.length} 种配置` : effective[0] || "暂时无法读取"}</p>
         {settings?.nodes.length === 1 && <p className="mt-1 text-xs text-muted-foreground">来自{sources[settings.nodes[0].source]}</p>}
       </div></div>
@@ -73,6 +73,7 @@ export default function NovelStepModels({ workflowId, task, disabled, onPendingC
         {!!settings?.nodes.length && <button onClick={() => setOpen(value => !value)} aria-expanded={open} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs hover:bg-secondary">{open ? "收起模型设置" : "调整模型"}<ChevronDown className={`h-3 w-3 ${open ? "rotate-180" : ""}`} /></button>}
       </div>
     </div>
+    <p className="mt-2 text-xs leading-6 text-muted-foreground">自动流程如已设置本书模型分工，将优先使用本书分工；实际调用以任务模型记录为准。</p>
     {settings?.nodes.some(node => !node.available && node.editable) && <p className="mt-3 text-xs text-amber-300">部分模型未配置或已不可用，请展开模型设置检查。</p>}
     {open && !!settings?.nodes.length && <div className="mt-4 space-y-4 border-t border-border pt-4">
       <p className="text-xs leading-6 text-muted-foreground">保存会更新本步骤的工作流默认配置，所有作品后续新建的同一步骤任务均会采用。已创建或正在运行的任务保留原配置。</p>
