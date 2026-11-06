@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..config import SESSIONS_DIR, WORKFLOWS_DIR
+from ..core.workspace_manager import resolve_workflow_workspace_path
 from ..workflow.definition import WorkflowDef
 from ..workflow.task_overrides import TASK_OVERRIDE_ERROR_CODES
 from .workflow_access import (
@@ -466,10 +467,13 @@ async def get_task_workspace_file(
     task = mgr._load_task(workflow_id, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
-    workspace = mgr._ws_manager.resolve_workflow_workspace(
+    workspace = resolve_workflow_workspace_path(
         workflow_id,
         override=task.workspace_override,
+        base_dir=mgr._ws_manager.base_dir,
     ).resolve()
+    if not workspace.is_dir():
+        raise HTTPException(status_code=404, detail="工作区文件不存在")
     from src.core.workspace_guard import WorkspaceGuard
 
     guard = WorkspaceGuard()

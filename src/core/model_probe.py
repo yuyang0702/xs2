@@ -82,7 +82,11 @@ def _probe_model_params(model: str) -> dict[str, Any]:
     fields = capabilities.get("model_params", {})
     params: dict[str, Any] = {}
     if "thinking_enabled" in fields:
-        params["thinking_enabled"] = False
+        # This model rejects disabled thinking, including on a minimal probe.
+        params["thinking_enabled"] = (
+            capabilities.get("provider_type") == "anthropic"
+            and model.partition(":")[2] == "claude-opus-5-5"
+        )
     efforts = capabilities.get("reasoning_efforts", [])
     if "reasoning_effort" in fields and "low" in efforts:
         params["reasoning_effort"] = "low"
@@ -246,7 +250,7 @@ async def probe_configured_model(
             streaming=False,
             model_params=model_params,
             provider_retries_enabled=False,
-            max_tokens=PROBE_MAX_OUTPUT_TOKENS,
+            max_tokens=256 if model_params.get("thinking_enabled") else PROBE_MAX_OUTPUT_TOKENS,
             timeout=timeout_seconds,
         )
     except ModelCredentialNotConfiguredError as error:

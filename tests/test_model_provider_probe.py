@@ -41,6 +41,32 @@ class _FakeProbeLlm:
         return self.output
 
 
+@pytest.mark.parametrize("provider_type,model,thinking,budget", [
+    ("anthropic", "claude-opus-5-5", True, 256),
+    ("anthropic", "claude-3-5-sonnet", False, 32),
+    ("openai_compatible", "claude-opus-5-5", False, 32),
+])
+def test_probe_respects_adaptive_only_models_without_changing_other_routes(
+    monkeypatch, provider_type, model, thinking, budget,
+):
+    manager = SimpleNamespace(get_model_capabilities=lambda _: {
+        "provider_type": provider_type,
+        "model_params": {"thinking_enabled": {}, "reasoning_effort": {}},
+        "reasoning_efforts": ["low", "medium", "high"],
+    })
+    captured = {}
+    def create(**kwargs):
+        captured.update(kwargs)
+        return _FakeProbeLlm(SimpleNamespace(content="OK", response_metadata={}, usage_metadata={}))
+    monkeypatch.setattr(model_probe, "get_model_manager", lambda: manager)
+    monkeypatch.setattr(model_probe, "create_llm", create)
+    result = asyncio.run(model_probe.probe_configured_model("gateway:" + model))
+    assert result["ok"]
+    assert captured["model_params"]["thinking_enabled"] is thinking
+    assert captured["max_tokens"] == budget
+    assert captured["provider_retries_enabled"] is False
+
+
 def test_probe_runs_one_minimal_inference_without_retries(monkeypatch) -> None:
     output = SimpleNamespace(
         content=[{"type": "text", "text": "OK"}],

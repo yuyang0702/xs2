@@ -45,6 +45,7 @@ import WritingLibraryView from "../components/WritingLibraryView";
 import NovelWorkflowArtifact from "../components/NovelWorkflowArtifact";
 import NovelReadingDialog from "../components/NovelReadingDialog";
 import NovelStepModels from "../components/NovelStepModels";
+import NovelBookModels, { type BookModels } from "../components/NovelBookModels";
 import { NovelDisplaySettings, NovelWorkbenchProvider, NovelWorkbenchSurface, NovelUnitMotif } from "../components/NovelWorkbenchPreferences";
 import { repairNodeModels } from "../lib/novel-workbench-models";
 import "./novel-workbench.css";
@@ -98,6 +99,7 @@ type Mode = "short" | "serial";
 type AutoScope = "manual" | "short_full" | "serial_batch";
 type WritingMode = "original" | "reuse" | "distill";
 type Project = {
+  analysisModel?: string; writerModel?: string; polishModel?: string;
   chapterDrafts?: Record<string, Record<string, string>>;
   advisorBrief?: string;
   configuredFields?: string[];
@@ -677,6 +679,9 @@ function SidebarButton({ active, icon: Icon, label, onClick }: { active: boolean
 function SettingsView({ project, workspace, onSave, onContinue, onLibrary, onDistill, onBack }: { project: Project; workspace: string; onSave: (updated: Project) => Promise<void>; onContinue: () => void; onLibrary: () => void; onDistill: () => void; onBack: () => void }) {
   const [title, setTitle] = useState(project.title);
   const [mode, setMode] = useState(project.mode);
+  const [models, setModels] = useState<BookModels>({
+    analysisModel: project.analysisModel || "", writerModel: project.writerModel || "", polishModel: project.polishModel || "",
+  });
   const [values, setValues] = useState({ ...project.values });
   const [configuredFields, setConfiguredFields] = useState(project.configuredFields || []);
   const editedFields = useRef(new Set<string>());
@@ -696,7 +701,7 @@ function SettingsView({ project, workspace, onSave, onContinue, onLibrary, onDis
       if (!title.trim()) throw new Error("请填写作品名称。");
       if (!values.genre.trim()) throw new Error("请填写题材。");
       for (const key of ["conflict_point_count", "foreshadowing_count"]) if (!/^\d+$/.test(values[key] || "") || Number(values[key]) > 50) throw new Error("冲突和伏笔数量须为 0 到 50 的整数。");
-      await onSave({ ...project, title: title.trim(), mode, configuredFields, values: { ...project.values, ...values } });
+      await onSave({ ...project, ...models, title: title.trim(), mode, configuredFields, values: { ...project.values, ...values } });
       setTitle(title.trim());
       setFeedback(project.persisted ? "作品设置已保存，名称已同步到作品管理。" : "设置已应用到新作品草稿；开始第一个工作流步骤后才会保存作品。");
       next?.();
@@ -722,6 +727,14 @@ function SettingsView({ project, workspace, onSave, onContinue, onLibrary, onDis
           <label className="block text-sm">正文目标字数<input className={`${inputClass} mt-2`} value={values.target_word_count} onChange={event => update("target_word_count", event.target.value)} /><span className="mt-1 block text-xs text-muted-foreground">用于下一次正文生成，支持字数范围，例如 3000-4000。</span></label>
           <label className="block text-sm">预计篇幅<input className={`${inputClass} mt-2`} value={values.estimated_length} onChange={event => update("estimated_length", event.target.value)} /></label>
           <label className="block text-sm">每章字数<input className={`${inputClass} mt-2`} value={values.words_per_chapter} onChange={event => update("words_per_chapter", event.target.value)} /><span className="mt-1 block text-xs text-muted-foreground">预计篇幅和每章字数用于大纲规划。</span></label>
+        </section>
+        <section className={`${cardClass} space-y-4 p-5`}><h2 className="font-semibold">自动流程模型分工</h2>
+          <p className="text-xs leading-6 text-muted-foreground">为本书的自动创作流程分别选择资料整理、正文和润色模型。角色档案沿用人物步骤的模型设置。</p>
+          <label className="block text-sm">写手模式<select aria-label="写手模式" className={`${inputClass} mt-2`}
+            value={values.writer_type || "single"} onChange={event => update("writer_type", event.target.value)}>
+            <option value="single">单写手</option><option value="muti">多写手分场协作</option>
+          </select></label>
+          <NovelBookModels value={models} onChange={setModels} />
         </section>
         <section className={`${cardClass} space-y-4 p-5`}><h2 className="font-semibold">冲突与伏笔</h2><p className="text-xs leading-6 text-muted-foreground">规划时遵循目标、前置伏笔、阻碍、解决代价和后续问题的因果递进，正文与审核继续跟踪回收。</p>
           <label className="block text-sm">规划范围<select className={`${inputClass} mt-2`} value={values.conflict_plan_mode} onChange={event => update("conflict_plan_mode", event.target.value)}>{mode === "short" ? <option value="short_full">短篇全文</option> : <><option value="serial_opening">长篇开局</option><option value="serial_arc">长篇当前卷</option><option value="serial_chapter">长篇当前章节</option></>}</select></label>
