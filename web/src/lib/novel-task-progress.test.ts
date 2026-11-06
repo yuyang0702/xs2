@@ -165,3 +165,18 @@ test("failed finalization shows settled records without inventing a completion p
   assert.match(html, /节点记录已处理，任务结果待确认/);
   assert.doesNotMatch(html, /aria-valuenow|99%|100%/);
 });
+
+test("stage duration retains the earliest recorded execution when retries reset the task clock", () => {
+  const current = task({ started_at: "2026-11-01T03:01:50Z", node_states: {
+    prepare: node("prepare", "completed", { started_at: "2026-11-01T03:00:00Z", completed_at: "2026-11-01T03:00:05Z" }),
+    writer: node("writer", "running", { started_at: "2026-11-01T03:01:50Z" }),
+  } });
+  assert.equal(buildNovelTaskProgress(current, now).elapsedSeconds, 120);
+  const onlyRetry = task({ started_at: "2026-11-01T03:01:50Z", node_states: {
+    writer: node("writer", "running", { started_at: "2026-11-01T03:01:50Z", attempt_history: [{
+      attempt_number: 1, trigger: "initial", status: "failed", automatic_retry_count: 0,
+      started_at: "2026-11-01T03:00:00Z", completed_at: "2026-11-01T03:01:40Z", error: "连接中断",
+    }] }),
+  } });
+  assert.equal(buildNovelTaskProgress(onlyRetry, now).elapsedSeconds, 120);
+});

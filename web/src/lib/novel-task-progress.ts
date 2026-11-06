@@ -40,6 +40,20 @@ function elapsed(start: string | null | undefined, end: number | null): number |
   return begin === null || end === null || !Number.isFinite(end) ? null : Math.max(0, Math.floor((end - begin) / 1000));
 }
 
+function stageStart(task: WorkflowTask): string | null | undefined {
+  let first = timestamp(task.started_at);
+  if (first === null) return task.started_at;
+  const collect = (state: NodeExecutionInfo) => {
+    for (const value of [state.started_at, ...(state.attempt_history || []).map(attempt => attempt.started_at)]) {
+      const time = timestamp(value);
+      if (time !== null) first = Math.min(first!, time);
+    }
+    Object.values(state.child_states || {}).forEach(collect);
+  };
+  Object.values(task.node_states || {}).forEach(collect);
+  return new Date(first).toISOString();
+}
+
 function addCount(counts: NovelNodeCounts, status: string) {
   counts[countKeys[status] || "unknown"]++;
 }
@@ -57,7 +71,7 @@ export function buildNovelTaskProgress(task: WorkflowTask | null, now = Date.now
   if (!task) return result;
   const terminal = ["completed", "failed", "stopped"].includes(task.status);
   const taskEnd = terminal ? timestamp(task.completed_at) : now;
-  result.elapsedSeconds = elapsed(task.started_at, taskEnd);
+  result.elapsedSeconds = elapsed(stageStart(task), taskEnd);
   const savedSnapshot = task.snapshot_definition;
   const snapshot = savedSnapshot?.workflow_id === task.workflow_id ? savedSnapshot : undefined;
   const snapshotNodes = new Map((snapshot?.nodes || []).map(value => [value.id, value]));
