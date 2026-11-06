@@ -1,6 +1,6 @@
 import NovelResourceGate from "../components/NovelResourceGate";
 import {novelWorkflowId} from "../lib/novel-resources";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   BookOpen,
@@ -15,6 +15,7 @@ import { createTask, getTask, listTasks, readWorkflowWorkspaceFile, runTask } fr
 
 
 const DEFAULT_WORKSPACE = "data/workspaces/market";
+const MARKET_WORKSPACE_KEY = "xs2-market-workspace";
 
 type RankingWork = {
   ranking_name: string;
@@ -46,7 +47,7 @@ function parseLikes(value: number | undefined) {
 
 function NovelMarketContent() {
   const MARKET_WORKFLOW = novelWorkflowId("market-ranking");
-  const [workspace, setWorkspace] = useState(() => localStorage.getItem("xs2-novel-workspace") || DEFAULT_WORKSPACE);
+  const [workspace, setWorkspace] = useState(() => localStorage.getItem(MARKET_WORKSPACE_KEY) || DEFAULT_WORKSPACE);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [task, setTask] = useState<any>(null);
   const [busy, setBusy] = useState(false);
@@ -55,25 +56,39 @@ function NovelMarketContent() {
   const [category, setCategory] = useState("");
   const [query, setQuery] = useState("");
 
-  const readLatestSnapshot = useCallback(async () => {
-    try {
-      const result = await listTasks(MARKET_WORKFLOW, { status: "completed", sort_by: "completed_at", sort_order: "desc", page: 1, page_size: 1 });
-      const latest = result.tasks?.[0];
-      if (!latest?.task_id) return;
-      const file = await readWorkflowWorkspaceFile(MARKET_WORKFLOW, latest.task_id, "market/zhihu-ranking.json");
-      setSnapshot(JSON.parse(file.content));
-      setTask(latest);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "读取榜单快照失败");
+  useEffect(() => {
+    let active = true;
+    async function readLatestSnapshot() {
+      try {
+        const pageSize = 20;
+        for (let page = 1; active; page += 1) {
+          const result = await listTasks(MARKET_WORKFLOW, { status: "completed", sort_by: "completed_at", sort_order: "desc", page, page_size: pageSize });
+          for (const candidate of result.tasks || []) {
+            if (!active) return;
+            try {
+              const file = await readWorkflowWorkspaceFile(MARKET_WORKFLOW, candidate.task_id, "market/zhihu-ranking.json");
+              if (!active) return;
+              setSnapshot(JSON.parse(file.content));
+              setTask(candidate);
+              return;
+            } catch (err) {
+              if (!(err instanceof Error && /^API Error 404:/.test(err.message))) throw err;
+            }
+          }
+          if (!result.tasks?.length || page * pageSize >= result.total) return;
+        }
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "读取榜单快照失败");
+      }
     }
-  }, []);
-
-  useEffect(() => { void readLatestSnapshot(); }, [readLatestSnapshot]);
+    void readLatestSnapshot();
+    return () => { active = false; };
+  }, [MARKET_WORKFLOW]);
 
   const refresh = async () => {
     setBusy(true);
     setError("");
-    localStorage.setItem("xs2-novel-workspace", workspace);
+    localStorage.setItem(MARKET_WORKSPACE_KEY, workspace);
     try {
       const created = await createTask(MARKET_WORKFLOW, { top_n: "100" }, undefined, undefined, workspace);
       await runTask(MARKET_WORKFLOW, created.task_id);
@@ -130,7 +145,7 @@ function NovelMarketContent() {
               <p className="mt-3 max-w-2xl text-sm leading-6 text-amber-100/75">参考你原项目的市场页面，先保存公开榜单快照，再用筛选、题材分布、热门词和作品明细观察创作方向。市场数据只作为参考证据，不会自动改写正文。</p>
             </div>
             <div className="min-w-[310px] rounded-2xl border border-white/10 bg-black/15 p-4 backdrop-blur">
-              <label className="mb-2 block text-xs font-medium text-amber-100/70">当前作品工作区</label>
+              <label className="mb-2 block text-xs font-medium text-amber-100/70">榜单资料工作区</label>
               <input value={workspace} onChange={(event) => setWorkspace(event.target.value)} className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white outline-none focus:border-amber-300/60" />
               <button type="button" onClick={refresh} disabled={busy} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-amber-950 transition hover:brightness-110 disabled:cursor-wait disabled:opacity-60">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}{busy ? "正在更新榜单" : "更新当前平台"}</button>
             </div>
