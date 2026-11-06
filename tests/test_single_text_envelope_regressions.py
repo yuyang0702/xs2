@@ -43,3 +43,20 @@ def test_already_valid_single_string_allows_literal_braces_without_repair():
     text = '她翻到 {旧页}，看见"先别走"。\n第二行。'
     result = prepare(json.dumps({'body': text}, ensure_ascii=False))
     assert result['success'] and json.loads(result['text'])['body'] == text
+
+
+def test_quoted_prose_followed_by_comma_is_not_an_extra_object_member():
+    raw = '{"body":"印文是"文记纸货",边缘模糊。她应了声"好",收起纸页。"}'
+    result = prepare(raw)
+    assert result['success']
+    assert json.loads(result['text']) == {
+        'body': '印文是"文记纸货",边缘模糊。她应了声"好",收起纸页。'}
+
+
+@pytest.mark.parametrize('raw', [
+    '{"body":"她应了声"好",收起纸页。", "extra" : "旁路"}',
+    '{"body":"她应了声"好",收起纸页。", "body" : "覆盖"}',
+    '{"body":"她应了声"好",收起纸页。", "extra" : false}',
+])
+def test_prose_comma_repair_still_rejects_additional_or_duplicate_members(raw):
+    assert not prepare(raw)['success']

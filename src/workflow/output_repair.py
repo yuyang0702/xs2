@@ -63,7 +63,10 @@ def validate_single_string_envelope(text: str, field: str, repair: bool) -> Json
         if not envelope:
             raise ValueError("expected a complete configured single-string envelope")
         body = envelope.group(1)
-        if any(char in body for char in '{}[]') or re.search(r'"\s*[,:]', body):
+        # A closing prose quote followed by a comma is not an object member.
+        # Extra/duplicate members still contain a quoted key followed by a
+        # colon; reject those, and all nested container syntax, before repair.
+        if any(char in body for char in '{}[]') or re.search(r'"\s*:', body):
             raise ValueError("ambiguous structure inside single-string envelope")
         escaped, index = [], 0
         while index < len(body):
