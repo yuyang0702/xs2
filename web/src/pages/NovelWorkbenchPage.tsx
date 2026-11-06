@@ -157,6 +157,7 @@ function restore(workspace: string): Project {
       configuredFields: saved.configuredFields || [], assistantConfigurations: saved.assistantConfigurations || {},
       pendingAssistantConfiguration: saved.pendingAssistantConfiguration || "",
       advisorBrief: saved.advisorBrief || "",
+      analysisModel: saved.analysisModel || "", writerModel: saved.writerModel || "", polishModel: saved.polishModel || "",
       selectedStyles: saved.selectedStyles || [], selectedConflicts: saved.selectedConflicts || [], referenceAdaptations: saved.referenceAdaptations || {},
       pendingReferenceAdoption: saved.pendingReferenceAdoption || "",
       continuationIssue: saved.continuationIssue || null,
@@ -348,7 +349,8 @@ function NovelWorkbenchContent() {
   useEffect(() => { void refreshCatalog(); const timer = window.setInterval(() => void refreshCatalog(), 30000); return () => window.clearInterval(timer); }, [refreshCatalog]);
   useEffect(() => { void refreshFiles().catch(() => {}); }, [refreshFiles]);
   useEffect(() => { if (view !== "home" || loadedWorkspace !== workspace) return; const refresh = () => { void refreshProjects(); void refreshFiles().catch(() => {}); }; refresh(); const timer = window.setInterval(refresh, 5000); return () => window.clearInterval(timer); }, [view, loadedWorkspace, workspace, refreshProjects, refreshFiles]);
-  useEffect(() => { if (project.persisted && loadedWorkspace === workspace) localStorage.setItem(storageKey(workspace), JSON.stringify(project)); }, [workspace, project, loadedWorkspace]);
+  // Keep unsaved drafts local too; switching the main tab must not discard them.
+  useEffect(() => { if (loadedWorkspace === workspace) localStorage.setItem(storageKey(workspace), JSON.stringify(project)); }, [workspace, project, loadedWorkspace]);
 
   // 监听快速采用后的自动跳转 - 关键：只监听 project.selected 变化
   useEffect(() => {
@@ -642,6 +644,7 @@ function NovelWorkbenchContent() {
   };
   const resetNew = (mode: Mode) => {
     const next = `data/workspaces/books/${mode}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+    localStorage.setItem("xs2-novel-workspace", next);
     setWorkspace(next); setWorkspaceDraft(next);
     setFiles([]);
     setLoadedWorkspace(next);
