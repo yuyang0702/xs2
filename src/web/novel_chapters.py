@@ -181,7 +181,7 @@ def remove_chapter(root, workflows_dir, chapter, operation, expected_sha256, exp
             state.update(stageId="mvp", index=5, autoNext=False, autoScope="manual",
                          autoLaunchStage="", autoPauseReason="", readerRepairCount=0,
                          repairModel="", repairReviewOnly=False, assessmentOnly=False,
-                         autoRepairPlanId="", continuationIssue=None)
+                         autoRepairPlanId="", continuationIssue=None, automaticCheckpoint=None)
         if operation == "regenerate" or chapter == current:
             if chapter != current:
                 state["values"].update(human_intent="", world_intent="", chapter_ending_mode="continue")

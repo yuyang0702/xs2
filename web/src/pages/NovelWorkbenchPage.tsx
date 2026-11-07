@@ -1,7 +1,7 @@
 import NovelResourceGate from "../components/NovelResourceGate";
 import NovelTaskProgress from "../components/NovelTaskProgress";
 import {automationState, readAutomation, controlAutomation} from "../lib/novel-automation";
-import {novelWorkflowId as workflowId, novelStageId} from "../lib/novel-resources";
+import {novelWorkflowId as workflowId, novelStageId, novelNewBookDefaults} from "../lib/novel-resources";
 import NovelAdvisorConversation from "../components/NovelAdvisorConversation";
 import NovelReferenceAdoptionStatus from "../components/NovelReferenceAdoptionStatus";
 import {startReferenceAdoption, restoreReferenceAdoption, recoverReferenceAdoption, referenceAdoptionOutcome, mergeReferenceAdoption, ReferenceAdoptionRejectedError, type ReferenceAdoptionJob} from "../lib/novel-reference-adoption";
@@ -149,7 +149,7 @@ async function backupCurrentOutline(workspace: string, fallbackContent = "") {
   return content;
 }
 
-function restore(workspace: string): Project {
+function restore(workspace: string, newBook=true): Project {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey(workspace)) || "null");
     if (saved) return {
@@ -169,15 +169,17 @@ function restore(workspace: string): Project {
       distillationSkipped: saved.distillationSkipped === true, advisorAccepted: saved.advisorAccepted === true, assistantPlan: saved.assistantPlan || "", writingMode: saved.writingMode || "original", libraryRefs: saved.libraryRefs || [], persisted: saved.persisted !== false,
     };
   } catch { /* invalid local draft */ }
+  const defaults=novelNewBookDefaults(newBook);
   return {
-    title: "未命名作品", mode: "short", index: 0, stageId: "novel-advisor", values: { ...FALLBACK_DEFAULTS, preparation_mode: "compact" }, refs: {}, completed: [], selected: [],
+    ...defaults,
+    title: "未命名作品", mode: "short", index: 0, stageId: "novel-advisor", values: { ...FALLBACK_DEFAULTS, preparation_mode: "compact",...defaults.values }, refs: {}, completed: [], selected: [],
     autoNext: false, autoScope: "manual", autoChapterLimit: 1, autoChapterStarted: null, directionConfirmed: false,
     distillationSkipped: false, advisorAccepted: false, assistantPlan: "", writingMode: "original", libraryRefs: [], persisted: false,
   };
 }
 
 function mergeProjectState(workspace: string, saved: Partial<Project>): Project {
-  const defaults = restore(workspace);
+  const defaults = restore(workspace,false);
   return automationState({ ...defaults, ...saved, values: { ...FALLBACK_DEFAULTS, ...saved.values }, persisted: true });
 }
 

@@ -140,6 +140,9 @@ class NovelAutomation:
         workflow_id = resources.get(stage)
         if not workflow_id:
             raise ValueError("当前步骤的小说工作流不可用，请检查插件。")
+        checkpoint_check = getattr(policy, 'validate_checkpoint', None)
+        if callable(checkpoint_check):
+            checkpoint_check(root, state, stage)
         if state.get("autoRepairPlanId"):
             self._repair(root, state, policy)
             return None
@@ -169,12 +172,20 @@ class NovelAutomation:
             others = [item for item in tasks if item["status"] in ACTIVE and item["task_id"] != ref["task_id"]]
             if others:
                 raise ValueError("本书有其他任务正在处理，自动创作已暂停以避免并发修改。")
+            dispatch_check = getattr(policy, 'validate_dispatch', None)
+            if callable(dispatch_check):
+                dispatch_check(root, state, stage, task)
             status = task.get("status")
             if status in {"pending", "resume_pending"}:
                 return ref
             if status in {"running", "preparing", "pre_running", "retry_waiting"}:
                 return None
             if status != "completed":
+                recover = getattr(policy, "recovery_action", None)
+                action = recover(state, stage, task, root=root) if callable(recover) else None
+                if action:
+                    self._apply_action(root, state, action)
+                    return None
                 raise ValueError(f"当前任务状态为 {status}，请检查任务后重新启用自动创作。")
             policy.verify_completion(root, state, stage, task)
             state["completed"] = list(dict.fromkeys([*state.get("completed", []), stage]))
@@ -186,10 +197,17 @@ class NovelAutomation:
         if not workflow:
             raise ValueError("当前工作流不可用，请检查插件状态。")
         definition = workflow["definition"]
+        checkpoint_options = {}
+        checkpoint = state.get('automaticCheckpoint') or {}
+        checkpoint_policy = getattr(policy, 'checkpoint_options', None)
+        if checkpoint.get('stage') == stage and callable(checkpoint_policy):
+            source = self.manager.get_task(workflow_id, checkpoint['source_task_id'])
+            checkpoint_options = checkpoint_policy(root, state, stage, definition, source)
         loader = getattr(self.assistant_jobs, "support_loader", None)
         support = loader(required=True) if callable(loader) else None
         policy.launch_check(root, state, stage, support)
         parameters = policy.parameters(state, definition)
+        parameters = {**checkpoint_options.get('parameter_values', {}), **parameters}
         feedback = parameters.get("author_feedback_file")
         if feedback:
             file = (root / feedback).resolve()
@@ -199,12 +217,20 @@ class NovelAutomation:
             intent = {"id": str(uuid4()), "stage": stage, "workflow_id": workflow_id,
                       "before_task_ids": [item["task_id"] for item in tasks if item["workflow_id"] == workflow_id],
                       "parameters": parameters}
+            if checkpoint_options.get('selected_node_ids'):
+                intent['selected_node_ids'] = checkpoint_options['selected_node_ids']
+                intent['checkpoint_source_task_id'] = checkpoint['source_task_id']
             state["autoPending"] = intent
             self._save(root, state)
         elif parameters != intent["parameters"]:
             raise ValueError("待启动任务的参数发生变化，请检查后重新启用。")
         task_options = {"parameter_values": parameters, "workspace_override": str(root),
                         "node_model_overrides": policy.model_overrides(state, definition, stage)}
+        if intent.get('selected_node_ids'):
+            if (intent['selected_node_ids'] != checkpoint_options.get('selected_node_ids')
+                    or intent.get('checkpoint_source_task_id') != checkpoint.get('source_task_id')):
+                raise ValueError('待恢复任务的检查点发生变化')
+            task_options['selected_node_ids'] = intent['selected_node_ids']
         params_policy = getattr(policy, "model_params_overrides", None)
         if callable(params_policy):
             params_overrides = params_policy(state, definition, stage)

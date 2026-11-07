@@ -57,8 +57,15 @@ def require_manual_control(request: Request, root: Path):
 def novel_resources(request: Request):
     try:
         resources = workflow_resources(request.app.state.extension_manager, _get_manager(request))
-        console_service()
-        return {"owner": "xs2-novel-flywheel", "workflows": resources}
+        service = console_service()
+        defaults = {}
+        recipe = getattr(getattr(service, 'production', None), 'new_book_defaults', None)
+        if callable(recipe):
+            from src.core.model_manager import get_model_manager
+            models = get_model_manager()
+            defaults = recipe(models.get_all_providers(), models.get_default_model())
+        return {"owner": "xs2-novel-flywheel", "workflows": resources,
+                **({'new_book_defaults': defaults} if defaults else {})}
     except ValueError as error:
         raise HTTPException(503, str(error)) from error
 
@@ -1259,6 +1266,10 @@ async def save_project(payload: ProjectSave, request: Request):
         if incoming.get("_revision", 0) != revision:
             raise HTTPException(409, "作品已在后台或其他页面更新，请刷新作品后再保存")
         incoming["_revision"] = revision + 1
+        # Recovery budgets are durable server execution records. A browser
+        # without the new field must not reset them while saving settings.
+        incoming["automaticRecovery"] = existing.get("automaticRecovery", {})
+        incoming['automaticCheckpoint'] = existing.get('automaticCheckpoint')
         atomic_json(manifest, incoming)
         roots = {str(item) for item in known_workspaces()}
         roots.add(str(root))

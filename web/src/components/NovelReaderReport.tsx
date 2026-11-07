@@ -28,11 +28,16 @@ export default function NovelReaderReport({ report }: { report: RecordValue | nu
   return <>
     <div className="mt-5 flex items-end gap-3"><span className={`text-5xl font-semibold ${["revise", "reject"].includes(verdict) ? "text-amber-300" : "text-emerald-300"}`}>{score ?? "—"}</span><span className="mb-2 text-sm text-muted-foreground">{verdictLabel}</span></div>
     {text(report?.summary) && <p className="mt-4 text-sm leading-6 text-muted-foreground">{text(report?.summary)}</p>}
+    {([['fact_review', '事实与情节'], ['expression_review', '对白与表达']] as const).map(([key, label]) => {
+      const review = record(report?.[key]);
+      if (!review) return null;
+      return <section key={key} className="mt-3 rounded-xl border border-border bg-secondary/30 p-4 text-sm leading-6"><h3 className="font-medium">{label} · {({ pass: '通过', revise: '需要返修', reject: '需要重写' } as Record<string, string>)[text(review.verdict)] || '待核查'}</h3><p className="mt-1 text-muted-foreground">{text(review.summary)}</p></section>;
+    })}
     {issues.length > 0 && <div className="mt-5 space-y-3"><h3 className="text-sm font-medium">读者指出的问题 · {issues.length} 项</h3>{issues.map((issue, index) => {
       const detail = record(issue);
       const priority = text(detail?.priority);
       const fields = detail ? [
-        ["问题位置", text(detail.location)], ["阅读影响", text(detail.impact)], ["修改目标", text(detail.goal ?? detail.suggestion ?? detail.recommendation)],
+        ["问题位置", text(detail.location)], ["原文依据", text(detail.excerpts)], ["阅读影响", text(detail.impact)], ["修改目标", text(detail.goal ?? detail.suggestion ?? detail.recommendation)],
       ].filter(([, value]) => value) : [];
       return <article key={index} className="rounded-xl border border-border bg-secondary/30 p-4 text-sm leading-6"><div className="mb-2 flex flex-wrap items-center gap-2"><span className="font-medium">问题 {index + 1}</span>{priority && <span className="rounded-full bg-background/60 px-2 py-0.5 text-xs text-muted-foreground">{priorities[priority] || "待评估优先级"}</span>}</div>{fields.length ? <dl className="space-y-2">{fields.map(([label, value]) => <div key={label}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-0.5 whitespace-pre-wrap">{value}</dd></div>)}</dl> : <p className="whitespace-pre-wrap">{text(issue) || "这条建议暂缺详细说明，请刷新评估。"}</p>}</article>;
     })}</div>}

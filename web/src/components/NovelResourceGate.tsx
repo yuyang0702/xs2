@@ -10,10 +10,10 @@ export default function NovelResourceGate({children}: {children: ReactNode}) {
     let active = true;
     setReady(false); setError('');
     setNovelResources({});
-    request<{workflows: Record<string, string>}>('/novel-console/resources').then(result => {
+    request<{workflows: Record<string, string>;new_book_defaults?:Parameters<typeof setNovelResources>[1]}>('/novel-console/resources').then(result => {
       if (active) {
         validateNovelResources(result?.workflows);
-        setNovelResources(result.workflows); setReady(true);
+        setNovelResources(result.workflows,result.new_book_defaults); setReady(true);
       }
     }).catch(reason => {if (active) setError(String(reason));});
     return () => {active = false;};

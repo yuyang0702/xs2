@@ -67,13 +67,20 @@ def start(payload: ProjectSave, request: Request):
             raise HTTPException(400, "请先完成参考准备及方向确认，再启动自动创作")
         incoming.update(autoNext=True, autoController="server-v1", autoArmed=True,
                         autoPauseReason="", _revision=revision + 1, persisted=True)
+        incoming["automaticRecovery"] = existing.get("automaticRecovery", {})
+        incoming['automaticCheckpoint'] = existing.get('automaticCheckpoint')
         pending = existing.get("autoPending")
         if pending and pending.get("task_id") and pending.get("workflow_id"):
             try:
                 prior_task = manager.get_task(pending["workflow_id"], pending["task_id"])
             except FileNotFoundError:
                 prior_task = None
-            if prior_task and prior_task.get("status") == "completed":
+            changed_scope = (incoming.get('stageId') != existing.get('stageId') or
+                             incoming.get('values', {}).get('chapter_number') != existing.get('values', {}).get('chapter_number'))
+            fresh_attempt = (existing.get('refs', {}).get(existing.get('stageId')) and
+                             incoming.get('refs', {}).get(existing.get('stageId')) != existing['refs'][existing['stageId']])
+            if prior_task and (prior_task.get("status") == "completed" or
+                               (prior_task.get('status') == 'stopped' and (changed_scope or fresh_attempt))):
                 workspace = prior_task.get("workspace_override")
                 if workspace and Path(workspace).resolve() != root:
                     raise HTTPException(409, "待恢复任务不属于本书，请检查任务归属")
