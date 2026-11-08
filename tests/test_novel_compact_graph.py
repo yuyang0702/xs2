@@ -26,6 +26,10 @@ CHARACTER_REVIEW = "agent_card_semantic_review"
 CHARACTER_AGENTS = ["agent_skeleton", "agent_belief", "agent_deep", "agent_deep", "agent_voice"]
 MVP_PREP_AGENTS = {"agent_we", "agent_id", "agent_od", "agent_cm", "agent_se", "agent_trimmer"}
 MVP_MULTI_AGENTS = {"agent_nw", "agent_aw", "agent_dw", "agent_dsw", "agent_iw", "agent_tw", "agent_si"}
+MVP_SHARED_PLANNER = "agent_nw"
+MVP_MULTI_WRITERS = MVP_MULTI_AGENTS - {MVP_SHARED_PLANNER}
+MVP_GUARD_AGENTS = ["agent_guard_facts_repair", "agent_guard_facts_audit",
+                    "agent_guard_expression_repair", "agent_guard_expression_audit"]
 
 
 def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None], reject_at=""):
@@ -44,6 +48,8 @@ def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None], reject
                 assert response["success"]
                 return NodeResult(status="failed", error="fixture overlap")
             outputs = {"character_names": '["阿禾", "小岚"]'} if ctx.node_def.id == "script_extract" else {}
+            if ctx.node_def.id == "script_guard_prepare":
+                outputs["guard_enabled"] = "yes"
             return NodeResult(status="completed", summary=ctx.node_def.id, outputs=outputs)
 
     monkeypatch.setitem(registry._plugins, Probe.node_type, Probe)
@@ -115,11 +121,14 @@ def test_compact_single_chapter_keeps_common_context_writer_and_quality_tail(mon
     task, calls, agents = _run_graph(monkeypatch, "mvp", {
         "preparation_mode": "compact", "conflict_plan_mode": "short_full", "chapter_number": "0001", "writer_type": "single",
     })
-    assert agents == ["agent_sw"]
+    assert agents == [MVP_SHARED_PLANNER, "agent_sw", *MVP_GUARD_AGENTS]
     assert calls[:4] == ["script_story_context", "script_sync_down", "script_smart_context", "script_short_context"]
     assert calls.index("script_short_context") < calls.index("agent_sw") < calls.index("script_si_post") < calls.index("script_check_originality")
     assert calls.count("agent_sw") == calls.count("script_si_post") == calls.count("script_check_originality") == 1
-    assert all(task.node_states[node].status == "skipped" for node in MVP_PREP_AGENTS | MVP_MULTI_AGENTS)
+    assert calls.index(MVP_SHARED_PLANNER) < calls.index("agent_sw")
+    assert calls.index("agent_sw") < calls.index("script_guard_prepare") < calls.index("script_guard_facts_commit")
+    assert calls.index("script_guard_facts_commit") < calls.index("script_guard_expression_commit") < calls.index("script_si_post")
+    assert all(task.node_states[node].status == "skipped" for node in MVP_PREP_AGENTS | MVP_MULTI_WRITERS)
 
 
 @pytest.mark.parametrize("values", [
@@ -140,20 +149,25 @@ def test_mvp_defaults_later_chapters_and_multi_writer_preserve_standard_path(mon
         assert task.node_states["agent_sw"].status == "skipped"
     else:
         assert agents.count("agent_sw") == 1
-        assert not (MVP_MULTI_AGENTS & set(agents))
+        assert agents.count(MVP_SHARED_PLANNER) == 1
+        assert not (MVP_MULTI_WRITERS & set(agents))
+    assert all(agents.count(node) == 1 for node in MVP_GUARD_AGENTS)
+    assert calls.index("script_guard_expression_commit") < calls.index("script_si_post")
 
 
 def test_compact_multi_writer_validates_assembly_before_publication(monkeypatch):
     task, calls, agents = _run_graph(monkeypatch, "mvp", {
         "preparation_mode": "compact", "conflict_plan_mode": "short_full", "chapter_number": "0001", "writer_type": "muti",
     })
-    assert set(agents) == MVP_MULTI_AGENTS
+    assert set(agents) == MVP_MULTI_AGENTS | set(MVP_GUARD_AGENTS)
     assert all(task.node_states[node].status == "skipped" for node in MVP_PREP_AGENTS | {"agent_sw"})
     assert calls.index("script_short_context") < calls.index("script_multi_prepare") < calls.index("agent_nw")
     assert calls.index("agent_nw") < calls.index("script_multi_plan")
     assembly = calls.index("script_multi_assemble")
     assert all(calls.index(writer) < assembly for writer in MVP_MULTI_AGENTS)
     assert assembly < calls.index("script_si_post") < calls.index("script_render_si")
+    assert assembly < calls.index("script_guard_prepare") < calls.index("script_guard_facts_commit")
+    assert calls.index("script_guard_facts_commit") < calls.index("script_guard_expression_commit") < calls.index("script_si_post")
 
 
 @pytest.mark.parametrize("gate", ["script_multi_scene_2", "script_multi_assemble"])
@@ -165,3 +179,4 @@ def test_compact_multi_retries_only_rejected_scene_and_then_reaches_publication(
     assert all(calls.count(writer) == 1 for writer in MVP_MULTI_AGENTS - {"agent_dw"})
     assert calls.count("script_render_si") == 1
     assert task.node_states["agent_dw"].attempt_count == 2
+    assert all(calls.count(node) == 1 for node in MVP_GUARD_AGENTS)
