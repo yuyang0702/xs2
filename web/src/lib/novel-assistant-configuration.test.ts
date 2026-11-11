@@ -46,3 +46,13 @@ test('world direction is forwarded as planning context without becoming a formal
     '困在楼内\n\n世界观方向（规划草稿）：\n停电，感染通过伤口传播');
   assert.equal(premiseWithWorldDirection({ premise: '困在楼内' }), '困在楼内');
 });
+
+test('adopts a proposed opening lead only when the author has left the choice open', () => {
+  const advice = entry();
+  advice.suggestions = [{ key: 'opening_lead', label: '独立导语', value: 'include', reason: '预告关系变化' }];
+  const current = { ...project(), values: { ...defaults, opening_lead: 'book' } };
+  assert.equal(applyAssistantConfiguration(current, advice, defaults).values.opening_lead, 'include');
+  const manual = { ...current, values: { ...current.values, opening_lead: 'omit' }, configuredFields: ['opening_lead'] };
+  advice.configuration_base!.values.opening_lead = 'omit';
+  assert.equal(applyAssistantConfiguration(manual, advice, defaults).values.opening_lead, 'omit');
+});

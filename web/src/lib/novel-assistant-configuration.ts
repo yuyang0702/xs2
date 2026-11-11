@@ -8,7 +8,7 @@ type ConfigurableProject = {
 };
 const allowed = new Set(['premise', 'genre', 'narrative_pov', 'target_word_count', 'words_per_chapter',
   'estimated_length', 'world_direction', 'conflict_plan_mode', 'conflict_point_count',
-  'foreshadowing_count', 'human_intent', 'world_intent']);
+  'foreshadowing_count', 'human_intent', 'world_intent', 'opening_lead']);
 const storyFacts = new Set(['premise', 'genre', 'narrative_pov', 'world_direction', 'estimated_length',
   'conflict_plan_mode', 'conflict_point_count', 'foreshadowing_count']);
 
@@ -25,8 +25,10 @@ export function applyAssistantConfiguration<T extends ConfigurableProject>(
   const applied: string[] = [], preserved: string[] = [];
   for (const item of entry.suggestions || []) {
     if (!allowed.has(item.key)) continue;
-    const current = values[item.key] || '';
-    const requested = entry.configuration_base.values[item.key] || '';
+    if (item.key === 'opening_lead' && !['include', 'omit'].includes(item.value)) continue;
+    const configuredValue = (value: string | undefined) => item.key === 'opening_lead' && value === 'book' ? '' : value || '';
+    const current = configuredValue(values[item.key]);
+    const requested = configuredValue(entry.configuration_base.values[item.key]);
     if ((established && storyFacts.has(item.key)) || project.mode !== entry.configuration_base.mode || current !== requested ||
         project.configuredFields?.includes(item.key) || (current.trim() && current !== (baseline[item.key] || ''))) {
       preserved.push(item.key);
@@ -40,6 +42,7 @@ export function applyAssistantConfiguration<T extends ConfigurableProject>(
 }
 
 export function configurationDisplay(key: string, value: string): string {
+  if (key === 'opening_lead') return value === 'include' ? '添加独立导语' : '直接进入正文';
   const enums: Record<string, string> = { first_person: '第一人称', third_person: '第三人称',
     short_full: '短篇全文', serial_opening: '长篇开局', serial_arc: '长篇当前卷', serial_chapter: '长篇当前章节' };
   return ['narrative_pov', 'conflict_plan_mode'].includes(key) ? enums[value] || value : value;
