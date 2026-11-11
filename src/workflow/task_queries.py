@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+from functools import lru_cache
 from pathlib import Path
 
 from src.config import WORKFLOWS_DIR
@@ -12,6 +13,22 @@ from src.config import WORKFLOWS_DIR
 from .definition import WorkflowDef, WorkflowTask
 
 logger = logging.getLogger(f"{__package__}.manager")
+
+@lru_cache(maxsize=4096)
+def _read_task_summary(path: Path, signature: tuple[int, int, int]) -> dict:
+    task = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        "task_id": task.get("task_id", path.stem),
+        "workflow_id": task.get("workflow_id", ""),
+        "name": task.get("name", ""),
+        "status": task.get("status", "running"),
+        "created_at": task.get("created_at", ""),
+        "updated_at": task.get("updated_at") or task.get("created_at", ""),
+        "started_at": task.get("started_at"),
+        "completed_at": task.get("completed_at"),
+        "main_session_id": task.get("main_session_id"),
+        "node_count": len(task.get("node_states") or {}),
+    }
 
 
 class TaskQueryMixin:
@@ -186,6 +203,54 @@ class TaskQueryMixin:
 
         return self._apply_task_filters_sort_paginate(
             all_tasks, status, search, sort_by, sort_order, page, page_size
+        )
+
+    @staticmethod
+    def _task_summaries(directory: Path):
+        if not directory.is_dir():
+            return
+        for path in directory.glob("*.json"):
+            try:
+                stat = path.stat()
+                row = _read_task_summary(path, (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size))
+                if row["task_id"] == path.stem and row["workflow_id"] == directory.parent.name:
+                    yield row
+            except FileNotFoundError:
+                continue  # A concurrent deletion should disappear from the list.
+            except (OSError, ValueError, AttributeError, TypeError):
+                logger.exception("加载任务摘要失败: %s", path.name)
+
+    def list_task_summaries(
+        self, *, workflow_id: str = "", main_session_id: str = "",
+        status: str = "", search: str = "", sort_by: str = "created_at",
+        sort_order: str = "desc", page: int = 1, page_size: int = 20,
+        global_list: bool = False,
+    ) -> dict:
+        if workflow_id:
+            try:
+                directories = [self._resolve_wf_dir(workflow_id)]
+            except ValueError:
+                directories = []
+        else:
+            directories = list(WORKFLOWS_DIR.iterdir()) if WORKFLOWS_DIR.is_dir() else []
+        rows = []
+        for directory in directories:
+            if not directory.is_dir():
+                continue
+            workflow_name = ""
+            if global_list:
+                try:
+                    definition = json.loads((directory / "definition.json").read_text(encoding="utf-8"))
+                    workflow_name = definition.get("name", "")
+                except (OSError, ValueError, AttributeError):
+                    pass
+            for task in self._task_summaries(directory / "tasks"):
+                if main_session_id and task["main_session_id"] != main_session_id:
+                    continue
+                rows.append({**task, "workflow_name": workflow_name} if global_list else dict(task))
+        return self._apply_task_filters_sort_paginate(
+            rows, status, search, sort_by, sort_order, page, page_size,
+            extra_search_fields=["workflow_name", "workflow_id"] if global_list else None,
         )
 
     def list_all_tasks(

@@ -11,7 +11,7 @@ import {
   Search,
   Trophy,
 } from "lucide-react";
-import { createTask, getTask, listTasks, readWorkflowWorkspaceFile, runTask } from "../lib/api";
+import { createTask, getTask, listTaskSummaries, readWorkflowWorkspaceFile, runTask } from "../lib/api";
 
 
 const DEFAULT_WORKSPACE = "data/workspaces/market";
@@ -62,7 +62,7 @@ function NovelMarketContent() {
       try {
         const pageSize = 20;
         for (let page = 1; active; page += 1) {
-          const result = await listTasks(MARKET_WORKFLOW, { status: "completed", sort_by: "completed_at", sort_order: "desc", page, page_size: pageSize });
+          const result = await listTaskSummaries(MARKET_WORKFLOW, { status: "completed", sort_by: "completed_at", sort_order: "desc", page, page_size: pageSize });
           for (const candidate of result.tasks || []) {
             if (!active) return;
             try {

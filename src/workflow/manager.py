@@ -219,16 +219,6 @@ class WorkflowManager(
                 continue
             try:
                 wf_def = WorkflowDef.from_dict(json.loads(def_file.read_text(encoding='utf-8')))
-                # 统计该工作流下运行中的任务数（预构建 running set，遍历目录）
-                tasks_dir = wf_dir / "tasks"
-                running_task_count = 0
-                if include_task_status and tasks_dir.exists():
-                    for f in tasks_dir.iterdir():
-                        task = self._load_task(wf_dir.name, f.stem)
-                        if task and task.status in {
-                            "running", "retry_waiting", "resume_pending",
-                        }:
-                            running_task_count += 1
                 summary = {
                     "workflow_id": wf_def.workflow_id,
                     "name": wf_def.name,
@@ -237,7 +227,15 @@ class WorkflowManager(
                     "created_at": wf_def.created_at,
                     "updated_at": wf_def.updated_at,
                 }
+                if wf_def.console:
+                    summary["console"] = wf_def.console
                 if include_task_status:
+                    running_task_count = sum(
+                        row["status"] in {
+                            "running", "retry_waiting", "resume_pending",
+                        }
+                        for row in self._task_summaries(wf_dir / "tasks")
+                    )
                     summary.update(
                         status="running" if running_task_count > 0 else "idle",
                         running_tasks=running_task_count,
@@ -246,6 +244,9 @@ class WorkflowManager(
             except Exception:
                 logger.exception(f"加载工作流定义失败: {wf_dir.name}")
         return workflows
+
+    def list_workflow_catalog(self) -> list[dict]:
+        return self.list_workflows(include_task_status=False)
 
     def get_workflow(self, workflow_id: str) -> dict | None:
         """获取单个工作流的完整定义。"""

@@ -410,8 +410,8 @@ export async function createAndRunTask(workflowId: string, fromNodeId?: string) 
   );
 }
 
-export async function listTasks(
-  workflowId: string,
+export async function listTaskSummaries(
+  workflowId: string | null,
   params?: {
     status?: string;
     search?: string;
@@ -421,10 +421,11 @@ export async function listTasks(
     page_size?: number;
   }
 ) {
-  const qs = buildListQuery(params);
-  return request<import("../types").TaskListResponse>(
-    `/workflows/${workflowId}/tasks${qs}`
-  );
+  const qs = buildListQuery({ ...params, summary: "true" });
+  const path = workflowId ? `/workflows/${encodeURIComponent(workflowId)}/tasks` : "/tasks";
+  return request<Omit<import("../types").TaskListResponse, "tasks"> & {
+    tasks: import("../types").WorkflowTaskSummary[];
+  }>(path + qs);
 }
 
 // ============ 执行方案 API ============
@@ -602,8 +603,10 @@ export async function getNovelReaderReport(workflowId: string, workspace: string
   return request<{report: Record<string, unknown>; chapter: string}>(`/novel-console/reader-report?${query}`);
 }
 
-export async function listWorkflows() {
-  return request<Array<{ workflow_id: string; name: string; node_count: number; version: number; status?: string }>>("/workflows");
+export async function listWorkflows({ includeTaskStatus = true } = {}) {
+  return request<Array<Omit<import("../types").WorkflowSummary, "status"> & { status?: string }>>(
+    includeTaskStatus ? "/workflows" : "/workflows?include_task_status=false",
+  );
 }
 
 export async function listWorkspaceFiles(

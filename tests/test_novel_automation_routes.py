@@ -71,9 +71,7 @@ def control(tmp_path, monkeypatch):
              "autoScope": "short_full", "values": {"chapter_number": "0001", "premise": "story"},
              "refs": {}, "completed": [], "persisted": True}
     novel_routes.atomic_json(root / ".novel-project.json", state)
-    for module in (novel_routes, novel_automation_routes):
-        monkeypatch.setattr(module, "_index", tmp_path / "data/novel-console/workspaces.json")
-        monkeypatch.setattr(module, "known_workspaces", lambda: [root])
+    monkeypatch.setattr(novel_routes, "_index", tmp_path / "data/novel-console/workspaces.json")
     resolver = ResourceIdResolver()
     resolver.register(build_resource_id_plan("xs2-novel-flywheel", "renamed", {"workflows": ["build"]}))
     extensions = SimpleNamespace(resource_resolver=resolver, is_running=lambda owner: manager.enabled)

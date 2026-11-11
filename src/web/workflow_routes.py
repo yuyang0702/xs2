@@ -219,10 +219,10 @@ def _validate_variable_keys(variables: list[dict]) -> None:
 # ============================================================
 
 @router.get("")
-async def list_workflows(request: Request):
+def list_workflows(request: Request, include_task_status: bool = True):
     """列出所有工作流。"""
     mgr = _get_manager(request)
-    return mgr.list_workflows()
+    return mgr.list_workflows() if include_task_status else mgr.list_workflow_catalog()
 
 
 @router.get("/{workflow_id}")
@@ -414,14 +414,15 @@ async def get_variable_references(workflow_id: str, request: Request):
 
 
 @router.get("/{workflow_id}/tasks")
-async def list_tasks(workflow_id: str, request: Request,
+def list_tasks(workflow_id: str, request: Request,
                      limit: int = 50,
                      status: str = "",
                      search: str = "",
                      sort_by: str = "created_at",
                      sort_order: str = "desc",
                      page: int = 1,
-                     page_size: int = 20):
+                     page_size: int = 20,
+                     summary: bool = False):
     """列出工作流的所有任务（支持筛选/排序/搜索/分页）。
 
     Query params:
@@ -433,6 +434,11 @@ async def list_tasks(workflow_id: str, request: Request,
         page_size: 每页条数（新参数，替代旧的 limit）
     """
     mgr = _get_manager(request)
+    if summary:
+        return mgr.list_task_summaries(
+            workflow_id=workflow_id, status=status, search=search, sort_by=sort_by,
+            sort_order=sort_order, page=page, page_size=page_size,
+        )
     return mgr.list_tasks(
         workflow_id,
         limit=limit,
@@ -1100,7 +1106,7 @@ async def delete_library_group(group: str, request: Request):
 
 
 @tasks_router.get("/tasks")
-async def list_all_tasks(request: Request,
+def list_all_tasks(request: Request,
                          status: str = "",
                          search: str = "",
                          sort_by: str = "created_at",
@@ -1108,7 +1114,8 @@ async def list_all_tasks(request: Request,
                          page: int = 1,
                          page_size: int = 20,
                          workflow_id: str = "",
-                         main_session_id: str = ""):
+                         main_session_id: str = "",
+                         summary: bool = False):
     """列出全部工作流的所有任务（全局任务历史），支持筛选/排序/搜索/分页。
 
     Query params:
@@ -1121,6 +1128,12 @@ async def list_all_tasks(request: Request,
         main_session_id: 按任务所属 Main 会话过滤（可选）
     """
     mgr = _get_manager(request)
+    if summary:
+        return mgr.list_task_summaries(
+            global_list=True, workflow_id=workflow_id, main_session_id=main_session_id,
+            status=status, search=search, sort_by=sort_by, sort_order=sort_order,
+            page=page, page_size=page_size,
+        )
     return mgr.list_all_tasks(
         status=status,
         search=search,

@@ -10,9 +10,11 @@ import shutil
 import socket
 import tempfile
 import threading
+from functools import lru_cache
 from html.parser import HTMLParser
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from urllib.parse import urljoin, urlparse
 from uuid import UUID
 from typing import Literal
@@ -22,6 +24,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from src.config import DATA_DIR, WORKFLOW_WORKSPACES_DIR
 from .workflow_access import _ensure_http_mutation_allowed, _ensure_workflow_writable, _get_manager
@@ -38,6 +41,7 @@ from .novel_workflow_models import novel_definition, model_settings, save_model_
 
 router = APIRouter(prefix="/api/novel-console", tags=["novel-console"])
 _lock = threading.RLock()
+_discovery_lock = threading.Lock()
 _index = DATA_DIR / "novel-console" / "workspaces.json"
 _manifest = ".novel-project.json"
 _library_root = DATA_DIR / "writing-library"
@@ -387,41 +391,80 @@ def atomic_json(target: Path, value: object) -> None:
         Path(name).unlink(missing_ok=True)
 
 
+@lru_cache(maxsize=2)
+def _discover_workspaces(base: Path, scan_window: int) -> tuple[set[Path], set[Path]]:
+    """Discover unregistered projects, including legacy directories with a story."""
+    visited, projects = set(), set()
+    for directory, children, files in os.walk(base):
+        root = Path(directory)
+        if root == base:
+            children[:] = [name for name in children if name != "reference-jobs"]
+            continue
+        visited.add(root)
+        if _manifest in files or "story" in children or root.name == "xs2-novel-workbench":
+            projects.add(root.resolve())
+    return visited, projects
+
+
 def known_workspaces() -> list[Path]:
-    # Books are isolated below data/workspaces/books/<slug>; include nested
-    # workspaces so the works switcher sees newly created books immediately.
-    roots = [item for item in WORKFLOW_WORKSPACES_DIR.rglob("*") if item.is_dir()]
-    if _index.is_file():
-        roots.extend(Path(item) for item in json.loads(_index.read_text(encoding="utf-8")))
-    return sorted({root.resolve() for root in roots if root.is_dir()}, key=str)
+    base = WORKFLOW_WORKSPACES_DIR.resolve()
+    with _discovery_lock:
+        visited, discovered = _discover_workspaces(base, int(monotonic() // 60))
+    roots = set(discovered)
+    reference_jobs = base / "reference-jobs"
+    # Older indexes also contain ordinary subdirectories from earlier scans.
+    # Those already inspected by discovery need no further filesystem checks.
+    for entry in read_json_file(_index, []):
+        if not isinstance(entry, str):
+            continue
+        root = Path(os.path.abspath(entry))
+        if root in visited or root.is_relative_to(reference_jobs):
+            continue
+        if ((root / _manifest).is_file() or (root / "story").is_dir()
+                or (root.name == "xs2-novel-workbench" and root.is_dir())):
+            roots.add(root.resolve())
+    return sorted(roots, key=str)
+
+
+def register_project(root: Path, *, new_project: bool) -> None:
+    """Register a saved project while holding the project mutation lock."""
+    roots = {item for item in read_json_file(_index, []) if isinstance(item, str)}
+    if str(root) not in roots:
+        roots.add(str(root))
+        atomic_json(_index, sorted(roots))
+    if new_project:
+        _discover_workspaces.cache_clear()
 
 
 @router.get("/projects")
 async def list_projects():
+    return await run_in_threadpool(_list_projects)
+
+
+def _list_projects():
     projects = []
     try:
         progress_service = getattr(console_service(), "progress", None)
     except ValueError:
         progress_service = None
-    with _lock:
-        for root in known_workspaces():
-            if root.is_relative_to((WORKFLOW_WORKSPACES_DIR / "reference-jobs").resolve()):
+    reference_jobs = (WORKFLOW_WORKSPACES_DIR / "reference-jobs").resolve()
+    for root in known_workspaces():
+        if root.is_relative_to(reference_jobs):
+            continue
+        path = root / _manifest
+        if path.is_file():
+            state = read_json_file(path, None)
+            if not isinstance(state, dict):
                 continue
-            path = root / _manifest
-            if path.is_file():
-                try:
-                    state = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    continue
-            elif (root / "story").is_dir() or root.name == "xs2-novel-workbench":
-                state = {"title": root.name, "mode": "serial" if len(list((root / "story").glob("*/chapter.md"))) > 1 else "short"}
-            else:
-                continue
-            item = {"workspace": str(root), "state": state}
-            if progress_service:
-                item["progress"] = progress(root, state, DATA_DIR / "workflows",
-                                            include_details=False, service=progress_service)
-            projects.append(item)
+        elif (root / "story").is_dir() or (root.name == "xs2-novel-workbench" and root.is_dir()):
+            state = {"title": root.name, "mode": "serial" if len(list((root / "story").glob("*/chapter.md"))) > 1 else "short"}
+        else:
+            continue
+        item = {"workspace": str(root), "state": state}
+        if progress_service:
+            item["progress"] = progress(root, state, DATA_DIR / "workflows",
+                                        include_details=False, service=progress_service)
+        projects.append(item)
     return {"projects": projects}
 
 
@@ -1254,6 +1297,7 @@ async def save_project(payload: ProjectSave, request: Request):
     with _lock:
         manifest = safe_target(root, _manifest)
         incoming = dict(payload.state)
+        new_project = not manifest.is_file()
         existing = read_json_file(manifest, {})
         automation = getattr(request.app.state, "novel_automation", None)
         if automation and automation.has_active(root):
@@ -1271,9 +1315,7 @@ async def save_project(payload: ProjectSave, request: Request):
         incoming["automaticRecovery"] = existing.get("automaticRecovery", {})
         incoming['automaticCheckpoint'] = existing.get('automaticCheckpoint')
         atomic_json(manifest, incoming)
-        roots = {str(item) for item in known_workspaces()}
-        roots.add(str(root))
-        atomic_json(_index, sorted(roots))
+        register_project(root, new_project=new_project)
     return {"success": True, "workspace": str(root), "revision": incoming["_revision"]}
 
 

@@ -47,7 +47,8 @@ def script_service(name):
 def workflow_resources(extension_manager, workflow_manager) -> dict[str, str]:
     if not extension_manager.is_running(OWNER):
         raise ValueError('小说插件未启用或启动失败，请在插件管理中检查。')
-    listed = workflow_manager.list_workflows()
+    list_catalog = getattr(workflow_manager, 'list_workflow_catalog', workflow_manager.list_workflows)
+    listed = list_catalog()
     items = listed.get('workflows', []) if isinstance(listed, dict) else listed
     result = {}
     for item in items:

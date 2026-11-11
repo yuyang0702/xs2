@@ -4,7 +4,7 @@ from pathlib import Path
 
 from src.core.workspace_manager import resolve_workflow_workspace_path
 
-from .novel_routes import ProjectSave, _lock, _manifest, _index, atomic_json, read_json_file, known_workspaces
+from .novel_routes import ProjectSave, _lock, _manifest, atomic_json, read_json_file, register_project
 from .workflow_access import _ensure_http_mutation_allowed, _ensure_workflow_writable, _get_manager
 from .novel_plugin import workflow_resources, console_service
 
@@ -58,7 +58,9 @@ def start(payload: ProjectSave, request: Request):
         adoption = getattr(request.app.state, "novel_reference_adoption_jobs", None)
         if adoption and adoption.has_active(root):
             raise HTTPException(409, "正在检查并采用本书写法，请等待完成后启动自动创作")
-        existing = read_json_file(root / _manifest, {})
+        manifest = root / _manifest
+        new_project = not manifest.is_file()
+        existing = read_json_file(manifest, {})
         revision = existing.get("_revision", 0)
         if service.has_active(root) or payload.state.get("_revision", 0) != revision:
             raise HTTPException(409, "作品已在后台更新，请刷新后操作")
@@ -93,10 +95,8 @@ def start(payload: ProjectSave, request: Request):
             incoming["refs"] = existing.get("refs", {})
         else:
             incoming.pop("autoPending", None)
-        atomic_json(root / _manifest, incoming)
-        roots = {str(item) for item in known_workspaces()}
-        roots.add(str(root))
-        atomic_json(_index, sorted(roots))
+        atomic_json(manifest, incoming)
+        register_project(root, new_project=new_project)
     return {"state": incoming, "workspace": str(root), "revision": incoming["_revision"]}
 
 

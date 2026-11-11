@@ -2,8 +2,8 @@
  * TaskHistoryPanel - 任务历史列表（参照蓝鲸标准运维"任务历史"页面）
  *
  * 双模式：
- * - 全局模式（workflowId=null）：展示全部工作流的所有任务，调用 listAllTasks
- * - 单工作流模式（workflowId 传入）：展示单个工作流的任务，调用 listTasks
+ * - 全局模式（workflowId=null）：展示全部工作流的任务摘要
+ * - 单工作流模式（workflowId 传入）：展示单个工作流的任务摘要
  *
  * 功能：
  * - 状态筛选 Tab（全部/等待中/运行中/已完成/失败/已停止）
@@ -18,8 +18,8 @@ import {
   Search, ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
   Settings, RotateCcw,
 } from "lucide-react";
-import { listTasks, listAllTasks } from "../../lib/api";
-import type { WorkflowTask } from "../../types";
+import { listTaskSummaries } from "../../lib/api";
+import type { WorkflowTaskSummary } from "../../types";
 
 // ============ 常量 ============
 
@@ -106,15 +106,11 @@ function formatDuration(seconds: number): string {
   return `${h}时${rm}分${s}秒`;
 }
 
-function calcDuration(t: WorkflowTask): string {
+function calcDuration(t: WorkflowTaskSummary): string {
   if (!t.started_at || !t.completed_at) return "-";
   const start = new Date(t.started_at).getTime();
   const end = new Date(t.completed_at).getTime();
   return formatDuration(Math.round((end - start) / 1000));
-}
-
-function nodeCount(t: WorkflowTask): number {
-  return Object.keys(t.node_states || {}).length;
 }
 
 // ============ 组件 ============
@@ -143,7 +139,7 @@ export default function TaskHistoryPanel({ workflowId, onTaskClick, onRedoTask, 
   const [pageSize, setPageSize] = useState(20);
 
   // 数据
-  const [tasks, setTasks] = useState<WorkflowTask[]>([]);
+  const [tasks, setTasks] = useState<WorkflowTaskSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
@@ -176,7 +172,9 @@ export default function TaskHistoryPanel({ workflowId, onTaskClick, onRedoTask, 
     };
   }, [columnMenuOpen]);
 
+  const requestId = useRef(0);
   const fetchTasks = useCallback(async () => {
+    const id = ++requestId.current;
     setLoading(true);
     const params = {
       status: statusFilter || undefined,
@@ -187,20 +185,20 @@ export default function TaskHistoryPanel({ workflowId, onTaskClick, onRedoTask, 
       page_size: pageSize,
     };
     try {
-      const data = isGlobal
-        ? await listAllTasks(params)
-        : await listTasks(workflowId!, params);
+      const data = await listTaskSummaries(isGlobal ? null : workflowId!, params);
+      if (id !== requestId.current) return;
       setTasks(data.tasks);
       setTotal(data.total);
     } catch (e) {
       console.error("加载任务列表失败:", e);
     } finally {
-      setLoading(false);
+      if (id === requestId.current) setLoading(false);
     }
   }, [workflowId, isGlobal, statusFilter, search, sortBy, sortOrder, page, pageSize]);
 
   useEffect(() => {
     fetchTasks();
+    return () => { requestId.current += 1; };
   }, [fetchTasks, refreshTrigger]);
 
   // 运行中任务自动轮询
@@ -208,10 +206,10 @@ export default function TaskHistoryPanel({ workflowId, onTaskClick, onRedoTask, 
     const hasRunning = tasks.some((t) => [
       "pending", "pre_running", "resume_pending", "running", "retry_waiting",
     ].includes(t.status));
-    if (!hasRunning) return;
-    const interval = setInterval(fetchTasks, 3000);
-    return () => clearInterval(interval);
-  }, [tasks, fetchTasks]);
+    if (!hasRunning || loading) return;
+    const timer = setTimeout(fetchTasks, 3000);
+    return () => clearTimeout(timer);
+  }, [tasks, fetchTasks, loading]);
 
   const handleSort = (key: string) => {
     if (sortBy === key) {
@@ -244,7 +242,7 @@ export default function TaskHistoryPanel({ workflowId, onTaskClick, onRedoTask, 
   );
 
   // 渲染单元格内容
-  const renderCell = (col: ColumnDef, t: WorkflowTask) => {
+  const renderCell = (col: ColumnDef, t: WorkflowTaskSummary) => {
     const cfg = STATUS_CONFIG[t.status] || STATUS_CONFIG.pending;
     switch (col.key) {
       case "name":
@@ -449,7 +447,7 @@ export default function TaskHistoryPanel({ workflowId, onTaskClick, onRedoTask, 
                       ))}
                       {visibleKeys.has("node_count") && (
                         <td className="px-4 py-3">
-                          <span className="text-xs text-muted-foreground">{nodeCount(t)} 节点</span>
+                          <span className="text-xs text-muted-foreground">{t.node_count} 节点</span>
                         </td>
                       )}
                       {visibleKeys.has("duration") && (

@@ -786,6 +786,7 @@ export interface WorkflowSummary {
   updated_at: string;
   status: string;
   running_tasks?: number;
+  console?: WorkflowDefinition["console"];
 }
 
 /** 单个工作流完整响应（定义 + 状态） */
@@ -827,6 +828,11 @@ export interface TaskListResponse {
   page: number;
   page_size: number;
 }
+
+export type WorkflowTaskSummary = Pick<WorkflowTask,
+  "task_id" | "workflow_id" | "workflow_name" | "name" | "status" |
+  "created_at" | "updated_at" | "started_at" | "completed_at" | "main_session_id"
+> & { node_count: number };
 
 /** 任务 + 定义完整响应 */
 export interface TaskDetailResponse {

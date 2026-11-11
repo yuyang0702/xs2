@@ -65,7 +65,7 @@ class NovelAutomation:
     async def _loop(self):
         while True:
             try:
-                for root in self.roots():
+                for root in await asyncio.to_thread(self.roots):
                     if (Path(root) / STATE_FILE).is_file():
                         await self.tick(root)
             except Exception:
