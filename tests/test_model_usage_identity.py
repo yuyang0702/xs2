@@ -7,7 +7,7 @@ import json
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
 from src.agent.session import AgentSession
 from src.core.graph_builder import build_graph
@@ -91,6 +91,10 @@ def test_session_tracks_each_run_model_across_child_calls_and_replayed_end_event
     events = [
         {"event": "on_chat_model_start", "run_id": "outer", "metadata": {"determinflow_model_id": "primary:writer"}},
         {"event": "on_chat_model_start", "run_id": "child", "metadata": {"determinflow_model_id": "fallback:reviewer"}},
+        {"event": "on_chat_model_stream", "run_id": "child", "data": {"chunk": AIMessageChunk(content="")}},
+        {"event": "on_chat_model_stream", "run_id": "child", "data": {"chunk": AIMessageChunk(content="", additional_kwargs={"reasoning_content": "reason"})}},
+        {"event": "on_chat_model_stream", "run_id": "child", "data": {"chunk": AIMessageChunk(content="do")}},
+        {"event": "on_chat_model_stream", "run_id": "child", "data": {"chunk": AIMessageChunk(content="ne")}},
         {"event": "on_chat_model_end", "run_id": "child", "data": {"output": output}},
         {"event": "on_chat_model_end", "run_id": "outer", "data": {"output": output}},
         {"event": "on_chat_model_end", "run_id": "child", "data": {"output": output}},
@@ -115,6 +119,9 @@ def test_session_tracks_each_run_model_across_child_calls_and_replayed_end_event
         ("child", "fallback:reviewer"), ("outer", "primary:writer"), ("retry", "backup:writer"),
     ]
     assert sum(row["call_count"] for row in session.get_cumulative_token_usage().values()) == 3
+    child, outer, _ = AgentSession.from_dict(session.to_dict()).get_token_usage_calls()
+    assert child["timestamp"] <= child["first_output_at"] <= child["first_text_at"] <= child["last_text_at"] <= child["completed_at"]
+    assert "first_text_at" not in outer
 
 
 def test_restoring_historical_unknown_model_usage_does_not_guess_from_current_settings():

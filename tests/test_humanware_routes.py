@@ -206,6 +206,7 @@ def test_assistant_history_get_projects_interruption_without_a_write(voice_clien
     installed = catalog.resolve_file('custom-xs2', 'voice_support', 'voice_support.py').directory.parent
     source = Path(__file__).resolve().parents[2] / 'DeterminFlow-Plugins/plugins/xs2-novel-flywheel/resources/script-library/xs2'
     shutil.copytree(source / 'console_service', installed / 'console_service')
+    shutil.copytree(source / 'prose_policy', installed / 'prose_policy')
     monkeypatch.setattr(novel_routes, '_available_assistant_workflow', lambda *_: 'available')
     client.app.include_router(novel_routes.router)
     response = client.get('/api/novel-console/assistant/history', params=payload(book))

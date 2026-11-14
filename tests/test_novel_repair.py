@@ -78,6 +78,7 @@ class RepairTests(unittest.IsolatedAsyncioTestCase):
         before = self.body.read_bytes()
         result = prepare_repair(self.root,entry,'用户调整：压缩中段，保留结尾互动。')
         instructions = self.root / result['feedback_path']
+        self.assertTrue(instructions.read_text(encoding='utf-8').startswith('# 第0001章 · 用户确认的返修方案\n'))
         self.assertIn('用户调整：压缩中段',instructions.read_text(encoding='utf-8'))
         self.assertEqual(self.body.read_bytes(),before)
         self.assertEqual((instructions.parent/'before.md').read_bytes(),before)

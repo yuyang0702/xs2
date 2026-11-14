@@ -48,7 +48,7 @@ def start(payload: ProjectSave, request: Request):
         raise HTTPException(503, "后台创作服务尚未就绪")
     try:
         resources = workflow_resources(request.app.state.extension_manager, manager)
-        console_service()
+        policy = console_service().production
     except ValueError as error:
         raise HTTPException(503, str(error)) from error
     if payload.workflow_id not in resources.values():
@@ -65,7 +65,7 @@ def start(payload: ProjectSave, request: Request):
         if service.has_active(root) or payload.state.get("_revision", 0) != revision:
             raise HTTPException(409, "作品已在后台更新，请刷新后操作")
         incoming = dict(payload.state)
-        if incoming.get("stageId") not in console_service().production.STAGES:
+        if incoming.get("stageId") not in policy.STAGES:
             raise HTTPException(400, "请先完成参考准备及方向确认，再启动自动创作")
         incoming.update(autoNext=True, autoController="server-v1", autoArmed=True,
                         autoPauseReason="", _revision=revision + 1, persisted=True)
@@ -82,10 +82,14 @@ def start(payload: ProjectSave, request: Request):
             fresh_attempt = (existing.get('refs', {}).get(existing.get('stageId')) and
                              incoming.get('refs', {}).get(existing.get('stageId')) != existing['refs'][existing['stageId']])
             if prior_task and (prior_task.get("status") == "completed" or
-                               (prior_task.get('status') == 'stopped' and (changed_scope or fresh_attempt))):
+                               (prior_task.get('status') in {'stopped', 'failed'} and (changed_scope or fresh_attempt))):
                 workspace = prior_task.get("workspace_override")
-                if workspace and Path(workspace).resolve() != root:
+                if (workspace and Path(workspace).resolve() != root) or (prior_task.get('status') == 'failed' and not workspace):
                     raise HTTPException(409, "待恢复任务不属于本书，请检查任务归属")
+                if prior_task.get('status') == 'failed' and existing.get('productionLaunchLease'):
+                    execution_guard = getattr(policy, 'execution_guard', None)
+                    if callable(execution_guard):
+                        execution_guard().release_launch(root, existing, pending.get('stage'))
                 pending = None
         if pending:
             if (incoming.get("stageId") != existing.get("stageId") or

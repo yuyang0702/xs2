@@ -102,8 +102,11 @@ def test_normal_polish_does_not_require_unselected_default_feedback_file(tmp_pat
     assert state(root)['autoNext'] is True
 
 
-def test_backend_dispatch_survives_restart_and_advances_without_browser(tmp_path):
+def test_backend_dispatch_survives_restart_and_advances_without_browser(tmp_path, monkeypatch):
     root, manager, service = setup(tmp_path)
+    (tmp_path / "src").mkdir()
+    manager.directory = service.workflows_dir = tmp_path / "data/workflows"
+    monkeypatch.setenv("DETERMINFLOW_PROJECT_DIR", str(tmp_path))
     asyncio.run(service.tick(root))
     assert len(manager.created) == 1
     assert state(root)["refs"]["build"]["task_id"] == "task-1"
@@ -157,7 +160,8 @@ def test_parameter_contract_filters_outputs_files_and_keeps_approved_feedback(tm
     asyncio.run(service.tick(root))
     params = manager.created[0]["parameter_values"]
     assert "source_file" not in params and "output" not in params
-    assert params["author_feedback_file"] == "instructions.md"
+    assert params["author_feedback_file"].startswith("cache/production-launch-feedback/")
+    assert (root / params["author_feedback_file"]).read_bytes() == (root / "instructions.md").read_bytes()
     assert params["conflict_plan_mode"] == "short_full"
 
 
@@ -200,7 +204,8 @@ def test_assessment_only_and_repair_review_only_stop_at_requested_boundary(tmp_p
     assert policy().next_action(root, data, "post-hoc")["action"] == "finish"
 
 
-def test_reader_repair_plan_is_durable_and_restarts_polish_with_feedback(tmp_path):
+@pytest.mark.parametrize("author_note", ["", "保留收摊后的对话。"])
+def test_reader_repair_plan_is_durable_and_restarts_polish_with_feedback(tmp_path, author_note):
     root, manager, service = setup(tmp_path)
     class Jobs:
         entries = []
@@ -213,6 +218,9 @@ def test_reader_repair_plan_is_durable_and_restarts_polish_with_feedback(tmp_pat
             return self.entries[-1]
     service.assistant_jobs = Jobs()
     data = state(root); data.update(stageId="reader-sim", readerRepairCount=0, autoRepairLimit=2)
+    if author_note:
+        (root / "author-note.md").write_text(author_note, encoding="utf-8")
+        data["values"]["author_feedback_file"] = "author-note.md"
     task = manager.create_task("custom-reader-sim", parameter_values={"chapter_number": "0001"}, workspace_override=str(root))
     task["status"] = "completed"; manager.save(task)
     write(manager.directory / "custom-reader-sim/.extension.json", {"owner": "xs2-novel-flywheel", "local_id": "reader-sim"})
@@ -230,10 +238,17 @@ def test_reader_repair_plan_is_durable_and_restarts_polish_with_feedback(tmp_pat
     assert updated["stageId"] == "polish"
     assert updated["readerRepairCount"] == 1
     assert "reader-sim" not in updated["refs"]
-    assert (root / updated["values"]["author_feedback_file"]).is_file()
+    feedback = root / updated["values"]["author_feedback_file"]
+    assert feedback.read_text(encoding="utf-8").startswith("# 第0001章 · 根据读者评估自动采用的返修方案\n")
+    context = policy().execution_guard().load(
+        "reader_context_test", Path(policy().__file__).resolve().parents[1] / "reader_review/reader_review.py"
+    ).revision_context(root)
+    assert context["author_feedback"] == author_note
+    assert "Revise the scene." in context["automatic_revision_advice"]
     asyncio.run(service.tick(root))
     assert manager.created[-1]["workflow_id"] == "custom-polish"
-    assert manager.created[-1]["parameter_values"]["author_feedback_file"] == updated["values"]["author_feedback_file"]
+    frozen = root / manager.created[-1]["parameter_values"]["author_feedback_file"]
+    assert frozen != feedback and frozen.read_bytes() == feedback.read_bytes()
 
 
 def test_two_ticks_cannot_create_duplicate_tasks_and_missing_inputs_pause(tmp_path):

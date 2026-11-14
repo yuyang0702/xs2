@@ -185,9 +185,9 @@ def test_completed_dispatch_does_not_replace_new_repair_feedback_or_refs(control
     assert result['values']['author_feedback_file'] == 'quality/repairs/new/instructions.md'
 
 
-@pytest.mark.parametrize('status,allowed', [('stopped', True), ('pending', False), ('running', False)])
+@pytest.mark.parametrize('status,allowed', [('stopped', True), ('failed', True), ('pending', False), ('running', False)])
 @pytest.mark.parametrize('change', ['chapter', 'stage'])
-def test_explicit_new_scope_releases_only_a_stopped_old_dispatch(control, status, allowed, change):
+def test_explicit_new_scope_releases_only_a_terminal_old_dispatch(control, status, allowed, change):
     control.client.post('/api/novel-console/automation/start', json=payload(control))
     ref = control.service._next_dispatch(control.root)
     task = control.manager.get_task(ref['workflow_id'], ref['task_id'])
@@ -209,7 +209,7 @@ def test_explicit_new_scope_releases_only_a_stopped_old_dispatch(control, status
     assert control.manager.get_task(ref['workflow_id'], ref['task_id'])['status'] == status
 
 
-@pytest.mark.parametrize('status,allowed', [('stopped',True),('pending',False),('running',False)])
+@pytest.mark.parametrize('status,allowed', [('stopped',True),('failed',True),('pending',False),('running',False)])
 def test_explicit_fresh_attempt_after_stop_does_not_resurrect_old_dispatch(control,status,allowed):
     control.client.post('/api/novel-console/automation/start',json=payload(control))
     ref=control.service._next_dispatch(control.root)
@@ -223,6 +223,19 @@ def test_explicit_fresh_attempt_after_stop_does_not_resurrect_old_dispatch(contr
         assert not result.get('autoPending') and result['refs']=={}
     else:
         assert result['autoPending']==paused['autoPending'] and result['refs']==paused['refs']
+
+
+@pytest.mark.parametrize('workspace', ['', 'unrelated-book'])
+def test_failed_dispatch_cannot_be_retired_without_exact_book_ownership(control,workspace):
+    control.client.post('/api/novel-console/automation/start',json=payload(control))
+    ref=control.service._next_dispatch(control.root)
+    task=control.manager.get_task(ref['workflow_id'],ref['task_id'])
+    task.update(status='failed',workspace_override=workspace)
+    control.manager.save(task)
+    control.client.post('/api/novel-console/automation/stop',json=payload(control))
+    paused=saved(control)
+    response=control.client.post('/api/novel-console/automation/start',json=payload(control,{**paused,'refs':{}}))
+    assert response.status_code==409 and saved(control)==paused
 
 
 def test_completed_boundary_drops_dispatch_receipt_before_pausing(control):

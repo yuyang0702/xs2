@@ -606,6 +606,18 @@ class ModelManager:
             provider_type,
             provider_config or self.get_provider(provider_id) or {},
         )
+        if provider_type == "anthropic" and model_name == "claude-opus-5-5":
+            # Opus 5.5 requires adaptive thinking, including when a workflow
+            # inherited a disabled setting or a manual budget from another model.
+            effort = model_params.get("reasoning_effort")
+            if effort == "none" or (effort is None and model_params.get("thinking_enabled") is False):
+                effort = "low"
+            model_params = {
+                **model_params,
+                "thinking_enabled": True,
+                "thinking_budget": None,
+                "reasoning_effort": effort,
+            }
         return build_provider_request(
             provider_type,
             model_params,

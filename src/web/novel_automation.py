@@ -119,7 +119,9 @@ class NovelAutomation:
             return
         if entry.get("status") != "completed":
             raise ValueError(entry.get("message") or "返修方案生成失败或被重启中断，请重新规划。")
-        result = prepare_repair(root, entry, str(entry.get("reply") or ""))
+        feedback_sources = getattr(policy, "repair_feedback_sources", None)
+        retained = feedback_sources(root, state) if feedback_sources else None
+        result = prepare_repair(root, entry, str(entry.get("reply") or ""), automatic=True, retained_feedback=retained)
         if not result["already_applied"]:
             entries = self.assistant_jobs.history(root)
             saved = next(item for item in entries if item["id"] == request_id)
@@ -206,6 +208,9 @@ class NovelAutomation:
         loader = getattr(self.assistant_jobs, "support_loader", None)
         support = loader(required=True) if callable(loader) else None
         policy.launch_check(root, state, stage, support)
+        launch_context = state.get("productionLaunchContext")
+        if launch_context is not None:
+            launch_context["workflow_id"] = workflow_id
         parameters = policy.parameters(state, definition)
         parameters = {**checkpoint_options.get('parameter_values', {}), **parameters}
         feedback = parameters.get("author_feedback_file")

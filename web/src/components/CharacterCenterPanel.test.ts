@@ -212,6 +212,30 @@ async function chooseJob(id: string) {
   await act(async () => { select.value = id; select.dispatchEvent(new Event("change", { bubbles: true })); });
 }
 
+test("saved role rehearsal displays both drafts, the blind mapping and turn timings", async () => {
+  const source = { chapter: "0001", revision: "a", character_ids: ["a", "b"], scene: "井口",
+    trial_mode: "role_rehearsal", scene_card: "两个人收起纸", ending: "纸收起来了" };
+  const reading = { voice: "一快一慢", exchange: "先看纸再说", strengths: [{ quote: "收起纸", comment: "接话顺" }], stiffness: [] };
+  handle = url => url.pathname.endsWith("/assistant/history") ? json({ entries: [{
+    id: "roles", purpose: "dialogue_trial", chapter: source.chapter, status: "completed",
+    created_at: "2026-11-04T00:00:00Z", character_source: source,
+    trial: { ...source, baseline: "他们收起纸。", candidate: "许青收起纸。", checks: [], rehearsal: {
+      writer: "交涉写手", public_start: "纸在台上", roles: [], turns: [{ name: "许青", action: "拿起纸", speech: "给我吧", seconds: 3 }],
+      blind: { preferred: "甲", labels: { 甲: "candidate", 乙: "baseline" }, reason: "接得顺", endings: "两版都收了纸", readings: { 甲: reading, 乙: reading } },
+      timings: { direct: 2, director: 1, write: 4, blind: 5 },
+    } },
+  }] }) : undefined;
+  await mount();
+  await click("场景试读");
+  await chooseJob("roles");
+  assert.match(text(), /A 版 · 现有分场写手他们收起纸。/);
+  assert.match(text(), /B 版 · 试演后成稿许青收起纸。/);
+  assert.match(text(), /偏好甲（B 版）/);
+  assert.match(text(), /许青（3 秒）　拿起纸　「给我吧」/);
+  assert.match(text(), /B 版 8.0 秒/);
+  assert.equal(mutations.length, 0);
+});
+
 test("returning to a trial resumes the selected saved job and never submits a new model request", async () => {
   const source = { chapter: "0001", revision: "a", character_ids: ["a", "b"], scene: "井口核对" };
   const saved = { id: "resumable", purpose: "dialogue_trial", chapter: "0001", status: "running",

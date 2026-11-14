@@ -106,7 +106,7 @@ def verify_source(root: Path, source: dict) -> None:
         raise ValueError('正文或读者报告已更新，这份方案已过期，请重新规划返修。')
 
 
-def prepare_repair(root: Path, entry: dict, plan: str) -> dict:
+def prepare_repair(root: Path, entry: dict, plan: str, *, automatic: bool = False, retained_feedback: list[dict] | None = None) -> dict:
     if entry.get('status') != 'completed' or entry.get('purpose') != 'reader_repair':
         raise ValueError('请先完成读者返修方案分析。')
     source = entry.get('repair_source', {})
@@ -128,7 +128,14 @@ def prepare_repair(root: Path, entry: dict, plan: str) -> dict:
     confirmed = root / f"story/{chapter}/confirmed_state.json"
     if confirmed.is_file():
         (folder / 'confirmed-state-before.json').write_bytes(confirmed.read_bytes())
-    text = f'# 第{chapter}章 · 用户确认的返修方案\n\n{plan.strip()}\n\n执行要求：按上述意见修改完整正文，不以计划代替正文；维护既定事实、人物、视角与本书风格。只处理本章，短篇收束全文，长篇普通章不提前完结全书。读者复评要检查修改是否落实，独立判断，不因采用方案而默认通过。\n'
+    heading = '根据读者评估自动采用的返修方案' if automatic else '用户确认的返修方案'
+    text = f'# 第{chapter}章 · {heading}\n\n{plan.strip()}\n\n执行要求：按上述意见修改完整正文，不以计划代替正文；维护既定事实、人物、视角与本书风格。只处理本章，短篇收束全文，长篇普通章不提前完结全书。读者复评要检查修改是否落实，独立判断，不因采用方案而默认通过。\n'
     target = folder / 'instructions.md'
     target.write_text(text, encoding='utf-8')
+    if automatic:
+        origin = {'origin': 'automatic', 'feedback_sha256': digest(target),
+                  'source_task_id': source.get('reader_task_id', ''),
+                  'source_body_sha256': source['chapter_sha256'], 'review_digest': source['report_sha256'],
+                  'retained_feedback_sources': retained_feedback or []}
+        (folder / 'automatic-origin.json').write_text(json.dumps(origin, ensure_ascii=False, indent=2), encoding='utf-8')
     return {'feedback_path': target.relative_to(root).as_posix(), 'already_applied': False}

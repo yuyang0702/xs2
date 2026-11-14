@@ -998,6 +998,7 @@ class NovelAssistantRequest(BaseModel):
     candidates: list[dict] = Field(default_factory=list, max_length=80)
     conflict_plan: dict = Field(default_factory=dict)
     purpose: Literal['general', 'reader_repair', 'configure', 'advisor', 'plot', 'character_edit', 'dialogue_trial'] = 'general'
+    advisor_task: Literal['discussion', 'topic_selection'] = 'discussion'
     chapter: str = Field(default='', max_length=4)
     scope: Literal['book', 'volume', 'chapter'] = 'chapter'
     character_id: str | None = Field(default=None, max_length=160)
@@ -1005,6 +1006,9 @@ class NovelAssistantRequest(BaseModel):
     character_ids: list[str] | None = Field(default=None, max_length=6)
     baseline: str | None = Field(default=None, max_length=12000)
     scene: str | None = Field(default=None, max_length=4000)
+    trial_mode: Literal['rewrite', 'role_rehearsal'] = 'rewrite'
+    scene_card: str | None = Field(default=None, max_length=6000)
+    ending: str | None = Field(default=None, max_length=2000)
     expected_revision: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
 
 
@@ -1048,6 +1052,11 @@ async def novel_assistant_history(workflow_id: str, workspace: str, request: Req
 @router.post("/assistant")
 async def novel_assistant(payload: NovelAssistantRequest, request: Request):
     """Submit a durable analysis without tying model execution to a browser tab."""
+    if payload.advisor_task == 'topic_selection' and (payload.purpose != 'advisor' or payload.project.get('mode', 'short') != 'short'):
+        raise HTTPException(422, '选题盲读用于短篇小说顾问。')
+    rehearsal = payload.trial_mode == 'role_rehearsal'
+    if rehearsal and payload.purpose != 'dialogue_trial':
+        raise HTTPException(422, '分角色试演用于场景试读。')
     if payload.purpose in CHARACTER_PURPOSES:
         from .humanware_routes import character_workspace
         try:
@@ -1056,12 +1065,18 @@ async def novel_assistant(payload: NovelAssistantRequest, request: Request):
             jobs = _assistant_jobs(request)
             existing = next((entry for entry in jobs.history(root) if entry['id'] == str(payload.request_id)), None)
             if existing:
-                if existing.get('purpose', 'general') != payload.purpose:
+                if (existing.get('purpose', 'general') != payload.purpose
+                        or existing.get('character_source', {}).get('trial_mode', 'rewrite') != payload.trial_mode):
                     raise ValueError('该请求编号已用于其他分析，请重新发起请求。')
                 return {"success": True, "entry": existing}
             data = payload.model_dump(mode="json", include={'purpose', 'chapter', 'question', 'character_id',
-                                     'section_id', 'character_ids', 'baseline', 'scene', 'expected_revision'})
-            data['_model_override'], data['_model_params'] = character_model(request, _get_manager(request), root, payload.purpose)
+                                     'section_id', 'character_ids', 'baseline', 'scene', 'expected_revision',
+                                     'trial_mode', 'scene_card', 'ending'})
+            if rehearsal:
+                data['_model_override'], data['_model_params'], data['_trial_writer'] = character_model(
+                    request, _get_manager(request), root, payload.purpose, include_writer=True)
+            else:
+                data['_model_override'], data['_model_params'] = character_model(request, _get_manager(request), root, payload.purpose)
             return {"success": True, "entry": jobs.start(root, str(payload.request_id), data)}
         except (ValueError, OSError) as error:
             raise HTTPException(409, str(error)) from error
@@ -1072,11 +1087,17 @@ async def novel_assistant(payload: NovelAssistantRequest, request: Request):
     data = payload.model_dump(mode="json")
     if payload.purpose == 'advisor':
         from src.core.model_manager import get_model_manager
-        settings = model_settings(novel_definition(mgr, advisor_workflow), get_model_manager())
+        models = get_model_manager()
+        settings = model_settings(novel_definition(mgr, advisor_workflow), models)
         nodes = settings['nodes']
         if len(nodes) != 1 or not nodes[0]['available']:
             raise HTTPException(409, "小说顾问尚未配置可用模型，请在当前步骤的模型设置中选择。")
         data['_model_override'] = nodes[0]['effective_model']
+        if payload.advisor_task == 'topic_selection':
+            from .novel_assistant import _isolated_params
+            provider, _, model = data['_model_override'].partition(':')
+            data['_model_params'] = _isolated_params({'reasoning_effort': 'medium'},
+                                                     models.get_model_provider_type(provider, model))
     if payload.purpose == 'reader_repair':
         try:
             data['_repair_context'] = repair_context(root, payload.chapter, DATA_DIR / 'workflows')

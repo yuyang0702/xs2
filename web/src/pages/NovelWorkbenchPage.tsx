@@ -3,6 +3,7 @@ import NovelTaskProgress from "../components/NovelTaskProgress";
 import {automationState, readAutomation, controlAutomation} from "../lib/novel-automation";
 import {novelWorkflowId as workflowId, novelStageId, novelNewBookDefaults} from "../lib/novel-resources";
 import NovelAdvisorConversation from "../components/NovelAdvisorConversation";
+import NovelTopicSelection from "../components/NovelTopicSelection";
 import NovelReferenceAdoptionStatus from "../components/NovelReferenceAdoptionStatus";
 import {startReferenceAdoption, restoreReferenceAdoption, recoverReferenceAdoption, referenceAdoptionOutcome, mergeReferenceAdoption, ReferenceAdoptionRejectedError, type ReferenceAdoptionJob} from "../lib/novel-reference-adoption";
 import { adoptNovelAdvisor, advisorMarkdown } from "../lib/novel-advisor";
@@ -37,7 +38,7 @@ import {
   type WritingLibraryItem,
 } from "../lib/api";
 import type { WorkflowDefinition, WorkflowVariable } from "../types";
-import type { NovelAssistantEntry } from "../lib/api";
+import type { NovelAdvisorTask, NovelAssistantEntry } from "../lib/api";
 import NovelArchiveContent from "../components/NovelArchiveContent";
 import NovelPlotProposals from "../components/NovelPlotProposals";
 import NovelReaderReport from "../components/NovelReaderReport";
@@ -1602,13 +1603,17 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
     if (loadingHistory || moduleOnly || lastAnswer?.purpose !== "configure") return;
     setProject(current => applyAssistantConfiguration(current, lastAnswer, FALLBACK_DEFAULTS, hasStoryFacts));
   }, [lastAnswer, loadingHistory, moduleOnly, hasStoryFacts, setProject]);
-  const ask = async (retryQuestion?: string, purpose: "general" | "configure" | "advisor" | "plot" = "general") => {
+  const ask = async (retryQuestion?: string, purpose: "general" | "configure" | "advisor" | "plot" = "general",
+    advisorTask: NovelAdvisorTask = "discussion") => {
     if (busy || loadingHistory || submitGuard.current) return;
     submitGuard.current = true;
     setSubmitting(true);
     setFeedback("正在提交分析，之前的回答会继续保留…");
     const question = retryQuestion || project.assistantPlan.trim();
-    const request = question || (advisorMode ? "我还没想好写什么，请结合当前作品类型给出具体故事方向、核心看点、写法建议与风险，明确推荐一个方案。" : "请为" + (nextStage?.title || "下一步") + "规划必要参数、章节看点、伏笔触发和递进冲突。");
+    const defaultQuestion = advisorTask === "topic_selection" ? "请提出三个不同的原创短篇题材，分别写出正文开头。"
+      : advisorMode ? "我还没想好写什么，请结合当前作品类型给出具体故事方向、核心看点、写法建议与风险，明确推荐一个方案。"
+      : "请为" + (nextStage?.title || "下一步") + "规划必要参数、章节看点、伏笔触发和递进冲突。";
+    const request = question || defaultQuestion;
     const requestId = crypto.randomUUID();
     const advisorBrief = project.advisorBrief?.endsWith(request) ? project.advisorBrief : [project.advisorBrief || "", request].filter(Boolean).join("\n\n补充讨论：\n");
     setProject((current) => ({ ...current, assistantPlan: request,
@@ -1628,6 +1633,7 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
         request_id: requestId,
         question: request,
         purpose,
+        ...(purpose === "advisor" ? {advisor_task: advisorTask} : {}),
         chapter:project.values.chapter_number || "0001",
         scope: purpose==='advisor' || purpose==='configure' ? "book" : scope,
         project: { title: project.title, mode: project.mode, values: project.values, writing_mode: project.writingMode, selected_candidate_ids: project.selected, selected_style_ids: project.selectedStyles || [], selected_conflict_ids: project.selectedConflicts || [], configured_fields: project.configuredFields || [], has_story_facts: hasStoryFacts, ...(purpose === "advisor" ? {advisor_brief:advisorBrief} : {}) },
@@ -1694,8 +1700,8 @@ function CompatibilityReport({ content, candidateSet, setProject, adoptedIds }: 
   };
   const adoptionStatus = <NovelReferenceAdoptionStatus job={adoptionJob} error={adoptionError} restoring={adoptionRestoring} onRefresh={()=>setAdoptionRefreshKey(key=>key+1)}/>;
   const latestAdvisor = [...entries].reverse().find(entry=>entry.status === 'completed' && entry.purpose === 'advisor');
-  if (advisorMode) return <>{adoptionStatus}<NovelAdvisorConversation referenceModels={adoptionModels} referenceModel={adoptionModel} onReferenceModelChange={setAdoptionModel} question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={question=>void ask(question,"advisor")} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)} onQuickAdopt={handleQuickAdopt} onManualSelect={onManualSelect} referenceAdoptionBusy={adoptionPending} referenceAdoptionApplied={adoptionJob?.status === "applied" && adoptionJob.entry_id === latestAdvisor?.id && referenceAdoptionOutcome(adoptionJob).success}/>
-    {readingEntry && <NovelReadingDialog title="AI 小说顾问 · 讨论结果" onClose={()=>setReadingEntry(null)}><details className="mb-5 text-sm leading-7 text-muted-foreground"><summary className="cursor-pointer">查看本次讨论的原始想法</summary><p className="mt-3 whitespace-pre-wrap">{readingEntry.question}</p></details><NovelArchiveContent content={advisorMarkdown(readingEntry.reply || readingEntry.message || "暂无分析内容")}/>{readingEntry.advisor_sections && Object.entries(readingEntry.advisor_sections).map(([key,content])=><section key={key} className="mt-6"><h3 className="mb-3 font-semibold">{{direction:"推荐的故事方向",hook:"核心看点",writing:"适合的写法",risks:"需要注意的问题"}[key]}</h3><NovelArchiveContent content={advisorMarkdown(typeof content === 'string' ? content : '')}/></section>)}</NovelReadingDialog>}
+  if (advisorMode) return <>{adoptionStatus}<NovelAdvisorConversation referenceModels={adoptionModels} referenceModel={adoptionModel} onReferenceModelChange={setAdoptionModel} question={project.assistantPlan} onQuestion={value=>setProject(current=>({...current,assistantPlan:value}))} onAsk={(question, task)=>void ask(question,"advisor",task)} shortStory={project.mode === "short"} entries={entries} busy={busy} loading={loadingHistory} feedback={feedback} now={now} receipts={project.assistantConfigurations} onAdopt={entry=>onAdoptAdvisor?.(entry) || {success:false,message:"暂时无法采用，请刷新页面后重试。"}} onRead={setReadingEntry} workflowBusy={workflowBusy} established={hasStoryFacts || !!project.refs.build} hasReference={!!(project.selected.length || project.selectedStyles?.length || project.selectedConflicts?.length)} librarySize={totalLibrarySize} adoptedCount={(project.selected?.length || 0) + (project.selectedStyles?.length || 0) + (project.selectedConflicts?.length || 0)} onQuickAdopt={handleQuickAdopt} onManualSelect={onManualSelect} referenceAdoptionBusy={adoptionPending} referenceAdoptionApplied={adoptionJob?.status === "applied" && adoptionJob.entry_id === latestAdvisor?.id && referenceAdoptionOutcome(adoptionJob).success}/>
+    {readingEntry && <NovelReadingDialog title="AI 小说顾问 · 讨论结果" onClose={()=>setReadingEntry(null)}><details className="mb-5 text-sm leading-7 text-muted-foreground"><summary className="cursor-pointer">查看本次讨论的原始想法</summary><p className="mt-3 whitespace-pre-wrap">{readingEntry.question}</p></details><NovelArchiveContent content={advisorMarkdown(readingEntry.reply || readingEntry.message || "暂无分析内容")}/>{readingEntry.topic_selection && <NovelTopicSelection selection={readingEntry.topic_selection} />}{readingEntry.advisor_sections && Object.entries(readingEntry.advisor_sections).map(([key,content])=><section key={key} className="mt-6"><h3 className="mb-3 font-semibold">{{direction:"推荐的故事方向",hook:"核心看点",writing:"适合的写法",risks:"需要注意的问题"}[key]}</h3><NovelArchiveContent content={advisorMarkdown(typeof content === 'string' ? content : '')}/></section>)}</NovelReadingDialog>}
   </>;
   return <aside className={cardClass + " h-fit p-5 xl:sticky xl:top-24"}>
     <div className="flex items-center gap-2"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary"><Sparkles className="h-4 w-4" /></div><div><h3 className="font-semibold">创作助手</h3><p className="text-xs text-emerald-400">默认调用大模型 · {currentStage.id === "reference-distillation" ? "记录随资料任务保存" : "记录随作品保存"}</p></div></div>

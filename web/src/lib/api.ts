@@ -493,6 +493,8 @@ export type NovelAssistantEntry = {
   finished_at?: string;
   elapsed_seconds?: number;
   purpose?: "general" | "reader_repair" | "configure" | "advisor" | "plot";
+  advisor_task?: NovelAdvisorTask;
+  topic_selection?: NovelTopicSelection;
   scope?: "book" | "volume" | "chapter";
   volume?: string;
   plot_options?: NovelPlotOption[];
@@ -510,6 +512,7 @@ export type NovelAssistantEntry = {
     };
     style_recommendations?: {
       adopted_styles?: Array<{library_id?: string; choice_id?: string; style: string; reason: string; usage_in_story: string; priority: string}>;
+      no_match_reason?: string;
       avoid_styles?: Array<{style: string; reason: string}>;
     };
     conflict_recommendations?: {
@@ -524,6 +527,18 @@ export type NovelAssistantEntry = {
   applied_at?: string;
   feedback_path?: string;
   applied_plan?: string;
+};
+
+export type NovelAdvisorTask = "discussion" | "topic_selection";
+
+export type NovelTopicSelection = {
+  target_words: string;
+  candidates: Array<{id: string; title: string; genre: string; opening: string; premise: string;
+    choice: string; cost: string; middle: string; ending: string}>;
+  ranking: Array<{id: string; excerpt: string; reason: string; question: string}>;
+  assessments: Array<{id: string; verdict: "fits" | "too_thin" | "too_broad";
+    reason: string; development: string; risk: string}>;
+  recommended_id: string | null;
 };
 
 export type NovelPlotChapter = {
@@ -585,6 +600,7 @@ export async function askNovelAssistant(payload: {
   candidates?: unknown[];
   conflict_plan?: Record<string, unknown>;
   purpose?: "general" | "reader_repair" | "configure" | "advisor" | "plot";
+  advisor_task?: NovelAdvisorTask;
   chapter?: string;
   scope?: "book" | "volume" | "chapter";
 }) {

@@ -1914,6 +1914,7 @@ class AgentSession:
         pending_tool_run_ids_by_node_run_id: dict[str, str] = {}
         llm_call_started_at: dict[str, str] = {}
         llm_call_model_ids: dict[str, str] = {}
+        llm_call_stream_times: dict[str, dict[str, str]] = {}
         settled_tool_call_ids: set[str] = set()
 
         async def finish_unsettled_tools(code: str, status: str = "failed"):
@@ -1986,6 +1987,17 @@ class AgentSession:
                             reasoning_content = message_content_reasoning(
                                 getattr(chunk, "content", None)
                             )
+                        token = message_content_text(getattr(chunk, "content", None))
+                        tool_chunks = getattr(chunk, "tool_call_chunks", None)
+                        run_id = str(event.get("run_id", ""))
+                        has_text = bool(token.strip())
+                        if run_id and (reasoning_content or has_text or tool_chunks):
+                            now = datetime.now(timezone.utc).isoformat()
+                            times = llm_call_stream_times.setdefault(run_id, {})
+                            times.setdefault("first_output_at", now)
+                            if has_text:
+                                times.setdefault("first_text_at", now)
+                                times["last_text_at"] = now
 
                         if reasoning_content and event_callback:
                             await self._emit_event({
@@ -1995,25 +2007,16 @@ class AgentSession:
                             })
 
                         # 处理普通内容
-                        if hasattr(chunk, "content") and chunk.content:
-
-                            token = message_content_text(chunk.content)
-
-                            if token and event_callback:
-
-                                await self._emit_event({
-
-                                    "type": "token",
-
-                                    "session_id": self.session_id,
-
-                                    "content": token,
-
-                                })
+                        if token and event_callback:
+                            await self._emit_event({
+                                "type": "token",
+                                "session_id": self.session_id,
+                                "content": token,
+                            })
 
                         # 处理 tool_call 流式增量（LLM 逐字生成工具调用参数）
-                        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                            for tc_chunk in chunk.tool_call_chunks:
+                        if tool_chunks:
+                            for tc_chunk in tool_chunks:
                                 value = tc_chunk.get if isinstance(tc_chunk, dict) else lambda key, default=None: getattr(tc_chunk, key, default)
                                 idx = value("index", 0) or 0
                                 tc_id = value("id")
@@ -2051,6 +2054,7 @@ class AgentSession:
 
                 elif kind == "on_chat_model_end":
                     run_id = str(event.get("run_id", ""))
+                    stream_times = llm_call_stream_times.pop(run_id, None)
                     if run_id and any(
                         item.get("run_id") == run_id
                         for item in self._token_usage_calls
@@ -2077,6 +2081,7 @@ class AgentSession:
                             call_timestamp=llm_call_started_at.pop(run_id, None),
                             run_id=run_id or None,
                             model_id=model_id if isinstance(model_id, str) and model_id else started_model_id,
+                            stream_times=stream_times,
                         )
 
                         self._sync_context_snapshot()
@@ -2651,6 +2656,7 @@ class AgentSession:
         call_timestamp: str | None = None,
         run_id: str | None = None,
         model_id: str | None = None,
+        stream_times: dict[str, str] | None = None,
     ) -> None:
         """从 LLM 响应中提取 token usage 数据并广播给前端。
 
@@ -2660,6 +2666,7 @@ class AgentSession:
             call_timestamp: 请求开始时间；缺失时回退为响应完成时间
             run_id: LangGraph 模型调用 ID，用于事件重放去重
             model_id: 本次模型调用携带的已解析 provider:model 身份
+            stream_times: 客户端观察到的首段模型输出和可见正文边界
         """
         try:
             if run_id and any(
@@ -2849,6 +2856,8 @@ class AgentSession:
             }
             if run_id:
                 call_entry["run_id"] = run_id
+            if stream_times:
+                call_entry.update(stream_times)
             # call_id 在 Session 内稳定，避免恢复或异常事件重放时重复入账。
             is_new_call = not any(
                 item.get("call_id") == call_entry["call_id"]

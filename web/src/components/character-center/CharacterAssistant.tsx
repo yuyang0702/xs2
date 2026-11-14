@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CharacterCenterError, errorText, type CharacterApi, type CharacterPreview, type Job, type Person, type Preference, type Preferred, type Section } from "./api";
+import { CharacterCenterError, errorText, type CharacterApi, type CharacterPreview, type Job, type Person, type Preference, type Preferred, type Rehearsal, type Section } from "./api";
 import { box, button, Comparison, field, muted, primary, Problem, prose } from "./ui";
 import { useAction } from "./useAction";
 import { sameCast, useAssistant, type JobScope } from "./useAssistant";
@@ -76,6 +76,9 @@ export function FieldSuggestion({ api, person, section, chapter, revision, ready
 
 export function SceneTrial({ api, person, roster, chapter, revision, ready }: JobProps & { roster: Person[] }) {
   const [cast, setCast] = useState([person.id]);
+  const [rehearse, setRehearse] = useState(false);
+  const [sceneCard, setSceneCard] = useState("");
+  const [ending, setEnding] = useState("");
   const [scene, setScene] = useState("");
   const [baseline, setBaseline] = useState("");
   const [question, setQuestion] = useState("");
@@ -97,6 +100,11 @@ export function SceneTrial({ api, person, roster, chapter, revision, ready }: Jo
     && sameCast(result.character_ids, binding.character_ids) ? result : undefined;
   const names = (ids: string[]) => ids.map(id => people.find(row => row.id === id)?.name || id).join("、");
   const locked = job.busy || action.busy;
+  const castLimit = rehearse ? 2 : 6;
+  const validTrial = rehearse ? cast.length === 2 && sceneCard.trim() && ending.trim() : baseline.trim();
+  const rehearsal = trial?.rehearsal;
+  const beforeLabel = rehearsal ? "A 版 · 现有分场写手" : "原文";
+  const afterLabel = rehearsal ? "B 版 · 试演后成稿" : "试读候选";
   const [blocked, setBlocked] = useState(false);
   const castRelations = candidates.filter(row => cast.includes(row.id)).flatMap(row =>
     row.relationships.filter(relation => relation.target_id && cast.includes(relation.target_id))
@@ -107,7 +115,8 @@ export function SceneTrial({ api, person, roster, chapter, revision, ready }: Jo
   }
   function submit() {
     if (!job.retryTransport) resetPreference();
-    job.start({ purpose: "dialogue_trial", chapter, scene, baseline, question, character_ids: cast, expected_revision: revision });
+    const common = { purpose: "dialogue_trial" as const, chapter, scene, question, character_ids: cast, expected_revision: revision };
+    job.start(rehearse ? { ...common, trial_mode: "role_rehearsal", scene_card: sceneCard, ending } : { ...common, baseline });
   }
   function accept() {
     if (!job.entry || !trial || blocked) return;
@@ -127,14 +136,24 @@ export function SceneTrial({ api, person, roster, chapter, revision, ready }: Jo
   }
   return <section className={box} aria-label="场景试读">
     <h3 className="font-semibold">场景试读</h3>
-    <p className={muted}>第 {Number(chapter)} 章。选择出场人物和当前场景，用作者提供的原文进行对照。</p>
+    <p className={muted}>第 {Number(chapter)} 章</p>
     <SavedJobs job={job} ready={ready && !action.busy} onSelectionChange={resetPreference}
       describe={entry => entry.character_source?.scene
-        ? entry.character_source.scene + " · " + names(entry.character_source.character_ids) : "本次提交"} />
+        ? entry.character_source.scene + " · " + names(entry.character_source.character_ids)
+          + (entry.character_source.trial_mode === "role_rehearsal" ? " · 分角色试演" : "") : "本次提交"} />
+    <label className="grid gap-1 text-sm">试读方式
+      <select className={field} value={rehearse ? "roles" : "rewrite"} disabled={locked || job.retryTransport} onChange={event => {
+        const enabled = event.target.value === "roles";
+        setRehearse(enabled);
+        if (enabled) setCast(values => values.slice(0, 2));
+      }}>
+        <option value="rewrite">原文改写</option><option value="roles">分角色试演对比</option>
+      </select>
+    </label>
     <fieldset className="flex flex-wrap gap-3 text-sm" disabled={locked || job.retryTransport}>
-      <legend className="pb-2">出场人物（最多六位）</legend>
+      <legend className="pb-2">{rehearse ? "出场人物（选两位，当前人物先开口）" : "出场人物（最多六位）"}</legend>
       {candidates.map(row => <label key={row.id} className="flex items-center gap-1">
-        <input type="checkbox" checked={cast.includes(row.id)} disabled={row.id === person.id || !cast.includes(row.id) && cast.length === 6}
+        <input type="checkbox" checked={cast.includes(row.id)} disabled={row.id === person.id || !cast.includes(row.id) && cast.length >= castLimit}
           onChange={event => setCast(values => event.target.checked ? [...values, row.id] : values.filter(id => id !== row.id))} />{row.name}
       </label>)}
     </fieldset>
@@ -148,26 +167,38 @@ export function SceneTrial({ api, person, roster, chapter, revision, ready }: Jo
       <label className="grid gap-1 text-sm">场景
         <input className={field} aria-label="场景" maxLength={4000} value={scene} disabled={locked || job.retryTransport} onChange={event => setScene(event.target.value)} placeholder="与章纲匹配时请使用完整场景名称" />
       </label>
-      <label className="grid gap-1 text-sm">对照原文
+      {rehearse ? <>
+        <label className="grid gap-1 text-sm">共用场景卡
+          <textarea className={field} rows={4} maxLength={6000} value={sceneCard} disabled={locked || job.retryTransport}
+            onChange={event => setSceneCard(event.target.value)} placeholder="场景从哪里开始、人物要做什么、必须发生什么" />
+        </label>
+        <label className="grid gap-1 text-sm">共用结局
+          <textarea className={field} rows={2} maxLength={2000} value={ending} disabled={locked || job.retryTransport}
+            onChange={event => setEnding(event.target.value)} placeholder="写到哪一个决定或结果为止" />
+        </label>
+      </> : <label className="grid gap-1 text-sm">对照原文
         <textarea className={field} aria-label="对照原文" rows={5} maxLength={12000} value={baseline} disabled={locked || job.retryTransport} onChange={event => setBaseline(event.target.value)} />
-      </label>
+      </label>}
       <label className="grid gap-1 text-sm">试读说明
         <textarea className={field} aria-label="试读说明" rows={2} maxLength={12000} value={question} disabled={locked || job.retryTransport}
-          onChange={event => setQuestion(event.target.value)} placeholder="想比较的表达，以及需要保留的事实和结果" />
+          onChange={event => setQuestion(event.target.value)} placeholder={rehearse ? "共同的篇幅、视角或想比较的表达" : "想比较的表达，以及需要保留的事实和结果"} />
       </label>
-      <button className={primary} disabled={locked || !ready || !scene.trim() || !baseline.trim() || !question.trim()} onClick={submit}>
+      <button className={primary} disabled={locked || !ready || !job.retryTransport && (!scene.trim() || !validTrial || !question.trim())} onClick={submit}>
         {job.retryTransport ? "重查本次请求" : job.entry?.status === "failed" ? "重新请求场景试读" : "请求场景试读"}
       </button>
     </div>
-    {binding?.scene && <p className={muted}>任务范围 · 第 {Number(binding.chapter)} 章 · {binding.scene} · {names(binding.character_ids)} · 对照来自提交时填写的原文</p>}
+    {binding?.scene && <p className={muted}>任务范围 · 第 {Number(binding.chapter)} 章 · {binding.scene} · {names(binding.character_ids)}</p>}
     <JobStatus entry={job.entry} busy={job.submitting} error={job.error} current={current} />
     {trial && <div className="space-y-3">
       <h4 className="font-medium">{trial.scene} · {names(trial.character_ids)}</h4>
-      <Comparison before={trial.baseline} after={trial.candidate} afterLabel="试读候选" />
-      <h4 className="font-medium">作者核对点</h4>
-      <ul className="list-disc space-y-1 pl-5">{trial.checks.map((check, index) => <li key={index} className={prose}>{check}</li>)}</ul>
+      <Comparison before={trial.baseline} after={trial.candidate} beforeLabel={beforeLabel} afterLabel={afterLabel} />
+      {rehearsal ? <RehearsalDetails record={rehearsal} sceneCard={binding?.trial_mode === "role_rehearsal" ? binding.scene_card : undefined}
+        ending={binding?.trial_mode === "role_rehearsal" ? binding.ending : undefined} /> : <>
+        <h4 className="font-medium">作者核对点</h4>
+        <ul className="list-disc space-y-1 pl-5">{trial.checks.map((check, index) => <li key={index} className={prose}>{check}</li>)}</ul>
+      </>}
       {preference ? <div role="status" className={box}>
-        <p>已保存{preference.preferred === "baseline" ? "原文" : "候选"}的表达偏好。</p>
+        <p>已保存「{preference.preferred === "baseline" ? beforeLabel : afterLabel}」的表达偏好。</p>
         <p className={muted}>{preference.reason} · {preference.carry_forward}</p>
         {(preference.preferred !== preferred || preference.reason !== reason.trim() || preference.carry_forward !== guidance.trim()) &&
           <p className={muted}>此任务已有保存记录，以上为原记录。</p>}
@@ -179,7 +210,7 @@ export function SceneTrial({ api, person, roster, chapter, revision, ready }: Jo
         <fieldset className="grid gap-2" disabled={locked || blocked}>
           <legend className="text-sm">偏好的版本</legend>
           <select aria-label="偏好的版本" className={field} value={preferred} onChange={event => setPreferred(event.target.value as Preferred)}>
-            <option value="baseline">原文</option><option value="candidate">试读候选</option>
+            <option value="baseline">{beforeLabel}</option><option value="candidate">{afterLabel}</option>
           </select>
           <textarea aria-label="采用理由" className={field} rows={2} maxLength={2000} value={reason} placeholder="采用理由" onChange={event => setReason(event.target.value)} />
           <textarea aria-label="保留的表达建议" className={field} rows={2} maxLength={2000} value={guidance} placeholder="保留的表达建议" onChange={event => setGuidance(event.target.value)} />
@@ -189,4 +220,37 @@ export function SceneTrial({ api, person, roster, chapter, revision, ready }: Jo
       </>}
     </div>}
   </section>;
+}
+
+function RehearsalDetails({ record, sceneCard, ending }: { record: Rehearsal; sceneCard?: string; ending?: string }) {
+  const { blind, timings } = record;
+  const label = (key: string) => `${key}（${blind.labels[key] === "baseline" ? "A 版" : "B 版"}）`;
+  const turnSeconds = record.turns.reduce((total, turn) => total + turn.seconds, 0);
+  return <div className="space-y-3">
+    <p className={muted}>{record.writer} · A 版 {timings.direct} 秒 · B 版 {(timings.director + turnSeconds + timings.write).toFixed(1)} 秒{timings.precision != null && ` · 确数验收 ${timings.precision} 秒`} · 盲读 {timings.blind} 秒</p>
+    <details className={box}>
+      <summary className="cursor-pointer font-medium">共用场景与角色试演</summary>
+      {sceneCard && <p className={prose}>场景卡　{sceneCard}</p>}
+      {ending && <p className={prose}>结局　{ending}</p>}
+      <p className={prose}>导演开场（{timings.director} 秒）　{record.public_start}</p>
+      {record.roles.map(role => <div key={role.name} className={prose}>
+        <h5 className="font-medium">{role.name}的试演资料</h5>
+        <p>所知　{role.knowledge}</p><p>目的　{role.goal}</p><p>口气　{role.voice}</p>
+      </div>)}
+      <ol className="list-decimal space-y-2 pl-5">{record.turns.map((turn, index) => <li key={index} className={prose}>
+        <strong>{turn.name}</strong>（{turn.seconds} 秒）{turn.action && `　${turn.action}`}{turn.speech && `　「${turn.speech}」`}
+      </li>)}</ol>
+      <p className={muted}>主写手成稿 {timings.write} 秒</p>
+    </details>
+    <div className={box}>
+      <h4 className="font-medium">独立盲读 · {blind.preferred === "tie" ? "两版并列" : `偏好${label(blind.preferred)}`}</h4>
+      <p className={prose}>{blind.reason}</p><p className={prose}>{blind.endings}</p>
+      {Object.entries(blind.readings).map(([key, reading]) => <div key={key} className="space-y-1">
+        <h5 className="font-medium">{label(key)}</h5>
+        <p className={prose}>{reading.voice}</p><p className={prose}>{reading.exchange}</p>
+        {reading.strengths.map((item, index) => <p key={index} className={prose}>自然处　「{item.quote}」　{item.comment}</p>)}
+        {reading.stiffness.map((item, index) => <p key={index} className={prose}>生硬处　「{item.quote}」　{item.comment}</p>)}
+      </div>)}
+    </div>
+  </div>;
 }

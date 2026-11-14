@@ -27,7 +27,9 @@ function matchesRequest(job: Job, ticket: Ticket, scope: JobScope) {
   const input = ticket.input;
   return job.id === ticket.id && job.purpose === input.purpose && job.chapter === input.chapter
     && (!source || matchesScope(job, scope) && source.revision === input.expected_revision
-      && (input.purpose !== "dialogue_trial" || source.scene === input.scene.trim() && sameCast(source.character_ids, input.character_ids)));
+      && (input.purpose !== "dialogue_trial" || source.scene === input.scene.trim() && sameCast(source.character_ids, input.character_ids)
+        && (source.trial_mode ?? "rewrite") === (input.trial_mode ?? "rewrite")
+        && (input.trial_mode !== "role_rehearsal" || source.scene_card === input.scene_card.trim() && source.ending === input.ending.trim())));
 }
 
 export function useAssistant(api: CharacterApi, scope: JobScope) {

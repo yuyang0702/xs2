@@ -156,10 +156,13 @@ test('an unconfirmed connection shows recovery instead of successful adoption',(
 });
 
 test('the advisor offers compatibility checking for style recommendations and reflects existing adoption',()=>{
-  const entry:NovelAssistantEntry={id:'advisor-7',question:'创意',reply:'建议',status:'completed',purpose:'advisor',source:'llm',stage:'小说顾问',created_at:'now',advisor_sections:{direction:'方向',hook:'看点',writing:'写法',risks:'风险',style_recommendations:{adopted_styles:[{style:'冷静克制',priority:'高',reason:'匹配',usage_in_story:'叙述'}],avoid_styles:[]}}};
+  const entry:NovelAssistantEntry={id:'advisor-7',question:'创意',reply:'建议',status:'completed',purpose:'advisor',source:'llm',stage:'小说顾问',created_at:'now',advisor_sections:{direction:'方向',hook:'看点',writing:'写法',risks:'风险',style_recommendations:{adopted_styles:[{library_id:'fixture-library',choice_id:'fixture-style',style:'冷静克制',priority:'高',reason:'匹配',usage_in_story:'许青先翻工作证再开口'}],avoid_styles:[]}}};
   const props={question:'',onQuestion:()=>{},onAsk:()=>{},entries:[entry],busy:false,loading:false,feedback:'',now:0,onAdopt:()=>({success:true,message:''}),onRead:()=>{},workflowBusy:false,established:true,hasReference:true,adoptedCount:2,onQuickAdopt:async()=>({success:true,message:''})};
   const html=renderToStaticMarkup(createElement(NovelAdvisorConversation,props));
   assert.match(html,/检查兼容并采用/);
+  assert.match(html,/fixture-library/);
+  assert.match(html,/fixture-style/);
+  assert.match(html,/许青先翻工作证再开口/);
   assert.match(html,/基于已采用写法优化/);
   const recheck=renderToStaticMarkup(createElement(NovelAdvisorConversation,{...props,referenceAdoptionApplied:true}));
   const button=[...recheck.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].find(match=>match[2].includes('重新检查兼容与人物适配'));

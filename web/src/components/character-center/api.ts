@@ -51,7 +51,16 @@ export type Audit = {
   chapter: string; revision: string; findings: Finding[]; stale_overrides: StaleOverride[];
   sources: { source_id: string; source_kind: string; status: string; provenance: string }[];
 };
-type Trial = { chapter: string; character_ids: string[]; scene: string; baseline: string; candidate: string; checks: string[] };
+type TrialMode = "rewrite" | "role_rehearsal";
+type Reading = { voice: string; exchange: string; strengths: Example[]; stiffness: Example[] };
+type Example = { quote: string; comment: string };
+export type Rehearsal = {
+  writer: string; public_start: string; roles: { name: string; knowledge: string; goal: string; voice: string }[];
+  turns: { name: string; speech: string; action: string; seconds: number }[];
+  blind: { labels: Record<string, Preferred>; preferred: string; reason: string; endings: string; readings: Record<string, Reading> };
+  timings: { direct: number; director: number; write: number; precision?: number; blind: number };
+};
+type Trial = { chapter: string; character_ids: string[]; scene: string; baseline: string; candidate: string; checks: string[]; rehearsal?: Rehearsal };
 export type Preferred = "baseline" | "candidate";
 export type Preference = {
   entry_id: string; chapter: string; character_ids: string[]; scene: string; preferred: Preferred;
@@ -60,10 +69,12 @@ export type Preference = {
 export type JobInput = {
   chapter: string; expected_revision: string; question: string;
 } & ({ purpose: "character_edit"; character_id: string; section_id: string }
-  | { purpose: "dialogue_trial"; character_ids: string[]; baseline: string; scene: string });
+  | { purpose: "dialogue_trial"; character_ids: string[]; scene: string } & (
+    { trial_mode?: "rewrite"; baseline: string } | { trial_mode: "role_rehearsal"; scene_card: string; ending: string }));
 export type JobSource = {
   chapter: string; revision: string; character_ids: string[];
   character_id?: string; section_id?: string; source_id?: string; scene?: string;
+  trial_mode?: TrialMode; scene_card?: string; ending?: string;
 };
 export type Job = {
   id: string; purpose: JobInput["purpose"]; chapter: string; status: "running" | "completed" | "failed";

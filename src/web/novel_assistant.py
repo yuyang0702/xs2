@@ -30,7 +30,7 @@ def _isolated_params(values, provider_type):
     return result
 
 
-def character_model(request, manager, root, purpose):
+def character_model(request, manager, root, purpose, *, include_writer=False):
     from src.agent.definition import get_agent_definition
     from src.core.model_manager import get_model_manager
     from src.workflow.task_overrides import MODEL_PARAMS_OVERRIDE_KEY, apply_node_model_overrides
@@ -75,7 +75,15 @@ def character_model(request, manager, root, purpose):
         params.update(installed_params)
     params.update((production.model_params_overrides(state, definition, stage) or {}).get(node_id, {}))
     provider, _, name = model.partition(':')
-    return model, _isolated_params(params, models.get_model_provider_type(provider, name))
+    settings = model, _isolated_params(params, models.get_model_provider_type(provider, name))
+    if not include_writer:
+        return settings
+    from src.session.prompt_builder import PromptBuilder
+    prompt_manager = getattr(request.app.state, 'prompt_manager', None)
+    if not agent or prompt_manager is None:
+        raise ValueError('场景试读无法读取当前分场写手的提示。')
+    writer = PromptBuilder(prompt_manager=prompt_manager).build_static_workflow_base(node['agent_type'])
+    return (*settings, {'label': node.get('label', node_id), 'system': writer})
 
 
 async def _receive_model_reply(llm, messages, on_output):
