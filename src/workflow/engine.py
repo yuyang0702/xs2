@@ -529,7 +529,10 @@ class WorkflowEngine(WorkflowFlowMixin, WorkflowLoopMixin):
             if session and hasattr(session, "get_token_usage_calls"):
                 result_token_usage_calls = session.get_token_usage_calls()
 
-        if previous_token_usage and previous_session_id != result.session_id:
+        if previous_token_usage and (
+            previous_session_id != result.session_id
+            or (not result.session_id and result_token_usage_calls)
+        ):
             node_state.token_usage = self._merge_token_usage(
                 previous_token_usage,
                 result_token_usage,

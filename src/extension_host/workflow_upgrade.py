@@ -93,6 +93,16 @@ def _merge_reviewed(base, local, upstream, path, conflicts, resolutions):
         return upstream
     if upstream == base or local == upstream:
         return local
+    if path.endswith("/first_message") and all(isinstance(value, str) for value in (base, local, upstream)):
+        # The editor and plugin can both append instructions. Keep both when
+        # their original message is byte-for-byte the same.
+        if base and local.startswith(base + "\n") and upstream.startswith(base + "\n"):
+            local_tail, upstream_tail = local[len(base):], upstream[len(base):]
+            if upstream_tail.startswith(local_tail):
+                return upstream
+            if local_tail.startswith(upstream_tail):
+                return local
+            return local + upstream_tail
     if all(isinstance(value, dict) for value in (base, local, upstream)):
         result = {}
         for key in dict.fromkeys([*upstream, *local, *base]):

@@ -174,6 +174,25 @@ def test_reviewed_upgrade_matches_regenerated_edge_ids_without_duplicate_routes(
     assert len(plan["definition"]["edges"]) == 1
 
 
+def test_workflow_upgrade_preserves_local_prompt_append_with_new_upstream_input(tmp_path):
+    from src.extension_host.workflow_upgrade import plan_reviewed_upgrade
+
+    source, target, base, sync = fixture(tmp_path)
+    base["nodes"][0]["first_message"] = "original"
+    write(source, base)
+    sync()
+    local = deepcopy(base)
+    upstream = deepcopy(base)
+    local["nodes"][0]["first_message"] += "\nLocal guidance"
+    upstream["nodes"][0]["first_message"] += "\n\n{{rehearsal}}"
+    write(target, local)
+    write(source, upstream)
+
+    plan = plan_reviewed_upgrade(target, source, base)
+    assert plan["conflicts"] == []
+    assert plan["definition"]["nodes"][0]["first_message"] == "original\nLocal guidance\n\n{{rehearsal}}"
+
+
 def test_provision_marker_records_explicit_local_identity(tmp_path):
     from src.extension_host.resource_ids import ResourceIdResolver, build_resource_id_plan
     source, target, base, sync = fixture(tmp_path)

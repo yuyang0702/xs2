@@ -82,10 +82,12 @@ registry = NodeRegistry()
 # 导入并注册各插件模块
 from . import agent   # noqa: E402, F401
 from . import approval  # noqa: E402, F401
+from . import novel_rehearsal  # noqa: E402, F401
 from . import script  # noqa: E402, F401
 from . import subprocess  # noqa: E402, F401
 
 registry.register(agent.AgentNode)
 registry.register(approval.ApprovalNode)
+registry.register(novel_rehearsal.NovelRehearsalNode)
 registry.register(script.ScriptNode)
 registry.register(subprocess.SubprocessNode)
