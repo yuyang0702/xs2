@@ -18,6 +18,7 @@ from src.workflow.definition import (
     WorkflowNode,
     WorkflowRunRecord,
     WorkflowTask,
+    WorkflowVariable,
 )
 from src.workflow.engine import WorkflowEngine
 from src.workflow.execution_flow import _retract_rejected_node_outputs
@@ -280,12 +281,17 @@ def test_script_node_argv_preserves_dynamic_values_exactly(tmp_path, monkeypatch
     )
     workspace = tmp_path / "workspace with spaces"
     workspace.mkdir()
+    (workspace / "inputs").mkdir()
+    (workspace / "inputs/chapter one's draft.md").write_text("正文", encoding="utf-8")
+    (workspace / "instructions.md").write_text("继续写。", encoding="utf-8")
     monkeypatch.setattr(config, "WORKFLOWS_DIR", tmp_path / "workflows")
     values = {
         "title": "Hero's Return",
         "author": "Jane Q. Author",
         "metadata": '{"quote":"\\"Hello\\"","owner":"O\'Brien"}',
-        "path": "inputs/chapter one's draft.md",
+        "path": "{{draft_path}}",
+        "draft_path": "inputs/chapter one's draft.md",
+        "instructions": "instructions.md",
     }
     node = WorkflowNode(
         id="script_capture",
@@ -298,10 +304,14 @@ def test_script_node_argv_preserves_dynamic_values_exactly(tmp_path, monkeypatch
                 "--author", "{{author}}",
                 "--metadata", "{{metadata}}",
                 "--path", "{{path}}",
+                "--instructions", "{{instructions}}",
             ],
+            "script_argv_path_variables": ["path"],
         },
     )
-    definition = WorkflowDef(workflow_id=workflow_id, nodes=[node])
+    definition = WorkflowDef(workflow_id=workflow_id, nodes=[node], variables=[
+        WorkflowVariable(key="path", type="file"), WorkflowVariable(key="instructions", type="file"),
+    ])
     ctx = NodeContext(
         definition=definition,
         node_def=node,
@@ -319,7 +329,8 @@ def test_script_node_argv_preserves_dynamic_values_exactly(tmp_path, monkeypatch
         "--title", values["title"],
         "--author", values["author"],
         "--metadata", values["metadata"],
-        "--path", values["path"],
+        "--path", values["draft_path"],
+        "--instructions", "继续写。",
     ]
 
 

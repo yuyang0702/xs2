@@ -369,9 +369,14 @@ class ScriptNode(BaseNodePlugin):
                     status="failed",
                     error="script_argv 必须是字符串数组",
                 )
+            path_variables = node_params.get("script_argv_path_variables", [])
+            if not isinstance(path_variables, list) or not all(isinstance(key, str) for key in path_variables):
+                return NodeResult(status="failed", error="script_argv_path_variables 必须是变量名数组")
+            # Scripts that open their own workspace inputs need paths, while other file variables still expand.
+            argv_variables = [variable for variable in variables if variable.key not in path_variables]
             for item in raw_script_argv:
                 script_argv.append(
-                    await resolve_placeholders(item, pv, variables, shared_ws)
+                    await resolve_placeholders(item, pv, argv_variables, shared_ws)
                 )
         else:
             script_args = await resolve_placeholders(

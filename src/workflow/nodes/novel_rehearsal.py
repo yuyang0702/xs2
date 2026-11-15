@@ -118,10 +118,16 @@ class NovelRehearsalNode(BaseNodePlugin):
 
         try:
             service = script_service("character_center")
+            chapter = values.get("chapter_number", "0001")
+            compact_short = (
+                config.get("compact_short_writer") is True and writer_id == "agent_sw" and slot == 0
+                and chapter == "0001" and bool(values.get("short_context_file")) and values.get("single_writer_plan") == ""
+            )
+            options = {"compact": True} if compact_short else {}
             async with asyncio.timeout(360):
                 output, count = await service.prepare_rehearsal(
-                    ctx.shared_ws, ctx.task_id, writer_id, values.get("chapter_number", "0001"),
-                    values.get("multi_dir", ""), slot, style, call, model_identity=identity,
+                    ctx.shared_ws, ctx.task_id, writer_id, chapter,
+                    values.get("multi_dir", ""), slot, style, call, model_identity=identity, **options,
                 )
             result = NodeResult(
                 status="completed",
