@@ -7,6 +7,9 @@ from src.core.workspace_manager import resolve_workflow_workspace_path
 from .novel_routes import ProjectSave, _lock, _manifest, atomic_json, read_json_file, register_project
 from .workflow_access import _ensure_http_mutation_allowed, _ensure_workflow_writable, _get_manager
 from .novel_plugin import workflow_resources, console_service
+from .novel_state import (
+    RETIRED_READER_PAUSE, normalize_project_state, preserve_reader_launch_history, requires_new_chapter_action,
+)
 
 router = APIRouter(prefix="/api/novel-console/automation", tags=["novel-console"])
 
@@ -36,7 +39,7 @@ def _root(request, workflow_id, workspace, *, allow_missing=False):
 @router.get("")
 def status(request: Request, workflow_id: str, workspace: str):
     with _lock:
-        return {"state": read_json_file(_root(request, workflow_id, workspace) / _manifest, {})}
+        return {"state": normalize_project_state(read_json_file(_root(request, workflow_id, workspace) / _manifest, {}))}
 
 
 @router.post("/start")
@@ -60,11 +63,13 @@ def start(payload: ProjectSave, request: Request):
             raise HTTPException(409, "正在检查并采用本书写法，请等待完成后启动自动创作")
         manifest = root / _manifest
         new_project = not manifest.is_file()
-        existing = read_json_file(manifest, {})
+        existing = normalize_project_state(read_json_file(manifest, {}))
         revision = existing.get("_revision", 0)
         if service.has_active(root) or payload.state.get("_revision", 0) != revision:
             raise HTTPException(409, "作品已在后台更新，请刷新后操作")
-        incoming = dict(payload.state)
+        if requires_new_chapter_action(payload.state):
+            raise HTTPException(409, RETIRED_READER_PAUSE)
+        incoming = normalize_project_state(payload.state)
         if incoming.get("stageId") not in policy.STAGES:
             raise HTTPException(400, "请先完成参考准备及方向确认，再启动自动创作")
         incoming.update(autoNext=True, autoController="server-v1", autoArmed=True,
@@ -99,6 +104,7 @@ def start(payload: ProjectSave, request: Request):
             incoming["refs"] = existing.get("refs", {})
         else:
             incoming.pop("autoPending", None)
+        preserve_reader_launch_history(existing, incoming)
         atomic_json(manifest, incoming)
         register_project(root, new_project=new_project)
     return {"state": incoming, "workspace": str(root), "revision": incoming["_revision"]}

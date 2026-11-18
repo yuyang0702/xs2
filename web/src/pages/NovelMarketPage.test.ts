@@ -16,7 +16,7 @@ const originalFetch = globalThis.fetch;
 let root: ReturnType<typeof createRoot> | undefined;
 const deletedBook = "data/workspaces/books/deleted-book";
 const resources = Object.fromEntries(["reference-distillation", "novel-advisor", "style-compatibility-advisor",
-  "adopt-reference", "build", "character", "story-plan", "outline", "mvp", "polish", "reader-sim", "post-hoc",
+  "adopt-reference", "build", "character", "story-plan", "outline", "mvp", "polish", "post-hoc",
   "export", "market-ranking"].map(stage => [stage, "novel-" + stage]));
 const snapshot = {
   source_name: "榜单样本", captured_at: "2026-11-06T12:00:00Z", boundary: "公开样本",

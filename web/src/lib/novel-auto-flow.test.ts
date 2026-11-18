@@ -1,15 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readerRepairDecision, shouldAdvanceSerialChapter } from "./novel-auto-flow";
-
-test("unapproved reader results cannot silently advance to delivery", () => {
-  for (const verdict of ["", "unknown"]) assert.ok(readerRepairDecision(verdict, true, 0, 2).pauseReason);
-  assert.deepEqual(readerRepairDecision("revise", true, 0, 2), { repair: true, pauseReason: "" });
-  assert.deepEqual(readerRepairDecision("reject", true, 1, 2), { repair: true, pauseReason: "" });
-  assert.ok(readerRepairDecision("revise", true, 2, 2).pauseReason);
-  assert.deepEqual(readerRepairDecision("pass", true, 2, 2), { repair: false, pauseReason: "" });
-  assert.deepEqual(readerRepairDecision("revise", false, 2, 2), { repair: true, pauseReason: "" });
-});
+import { shouldAdvanceSerialChapter } from "./novel-auto-flow";
 
 test("serial batches stop at their requested count and short stories never add another chapter", () => {
   const finished: number[] = [];

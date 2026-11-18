@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
@@ -11,7 +10,7 @@ from uuid import uuid4
 
 from src.workflow.model_preferences import atomic_write
 from src.runtime_admission import admitted_activity
-from .novel_repair import repair_context, prepare_repair
+from .novel_state import AUDIT_STAGE, RETIRED_READER_PAUSE, RETIRED_READER_STAGE, normalize_project_state
 
 logger = logging.getLogger(__name__)
 STATE_FILE = ".novel-project.json"
@@ -27,6 +26,13 @@ def _armed(state):
     return state.get("autoNext") is True and state.get("autoController") == "server-v1" and state.get("autoArmed") is True
 
 
+def _intent_candidates(tasks, intent):
+    return [item for item in tasks if item["workflow_id"] == intent["workflow_id"]
+            and item["task_id"] not in intent.get("before_task_ids", [])
+            and all(item.get("parameter_values", {}).get(key) == value
+                    for key, value in intent["parameters"].items())]
+
+
 class NovelAutomation:
     def __init__(self, manager, resources, roots, policy, assistant_jobs, lock, workflows_dir):
         self.manager, self.resources, self.roots, self.policy = manager, resources, roots, policy
@@ -36,7 +42,7 @@ class NovelAutomation:
 
     @staticmethod
     def has_active(root):
-        return _armed(_read(root))
+        return _armed(normalize_project_state(_read(root)))
 
     def _save(self, root, state):
         state["_revision"] = int(state.get("_revision") or 0) + 1
@@ -49,7 +55,7 @@ class NovelAutomation:
 
     def pause(self, root):
         with self.lock:
-            return self._pause(root, _read(root), "自动创作已暂停；已启动的任务继续执行。")
+            return self._pause(root, normalize_project_state(_read(root)), "自动创作已暂停；已启动的任务继续执行。")
 
     async def start(self):
         if self._runner is None or self._runner.done():
@@ -84,6 +90,7 @@ class NovelAutomation:
 
     def _apply_action(self, root, state, action):
         state.update(action.get("updates", {}))
+        state = normalize_project_state(state)
         # This action follows a verified terminal task; its launch receipt must
         # not be recovered as a new revision after the controller stops.
         state.pop("autoPending", None)
@@ -91,49 +98,53 @@ class NovelAutomation:
         if kind in {"pause", "finish"}:
             return self._pause(root, state, action.get("reason", "自动创作已结束。"))
         if kind == "repair":
-            state["autoRepairPlanId"] = state.get("autoRepairPlanId") or str(uuid4())
-            state["autoLaunchStage"] = ""
-        elif kind == "advance":
-            stage = action["stage"]
+            return self._pause(root, state, RETIRED_READER_PAUSE)
+        if kind == "advance":
+            stage = AUDIT_STAGE if action["stage"] == RETIRED_READER_STAGE else action["stage"]
             reset = set(action.get("reset", []))
+            reset.discard(RETIRED_READER_STAGE)
             state["refs"] = {key: value for key, value in state.get("refs", {}).items() if key not in reset}
             state["completed"] = [key for key in state.get("completed", []) if key not in reset]
             state.update(stageId=stage, autoLaunchStage=stage, autoPauseReason="")
-            stages = self.policy().STAGES
+            stages = [item for item in self.policy().STAGES if item != RETIRED_READER_STAGE]
             if stage in stages:
                 state["index"] = stages.index(stage)
         self._save(root, state)
         return state
 
-    def _repair(self, root, state, policy):
-        request_id = state["autoRepairPlanId"]
-        entry = next((item for item in self.assistant_jobs.history(root) if item.get("id") == request_id), None)
-        if entry is None:
-            payload = policy.repair_request(state)
-            payload["_repair_context"] = repair_context(root, payload["chapter"], self.workflows_dir)
-            started = self.assistant_jobs.start(root, request_id, payload)
-            if started.get("id") != request_id:
-                raise ValueError("本书另有助手分析正在进行，请完成后再继续自动返修。")
+    def _reconcile_retired_reader(self, root, state):
+        token = state.get("productionLaunchLease")
+        if not isinstance(token, dict) or token.get("stage") != RETIRED_READER_STAGE:
             return
-        if entry.get("status") == "running":
+        execution_guard = getattr(self.policy(), "execution_guard", None)
+        if not callable(execution_guard):
             return
-        if entry.get("status") != "completed":
-            raise ValueError(entry.get("message") or "返修方案生成失败或被重启中断，请重新规划。")
-        feedback_sources = getattr(policy, "repair_feedback_sources", None)
-        retained = feedback_sources(root, state) if feedback_sources else None
-        result = prepare_repair(root, entry, str(entry.get("reply") or ""), automatic=True, retained_feedback=retained)
-        if not result["already_applied"]:
-            entries = self.assistant_jobs.history(root)
-            saved = next(item for item in entries if item["id"] == request_id)
-            saved.update(applied_at=datetime.now(timezone.utc).isoformat(), feedback_path=result["feedback_path"], applied_plan=entry["reply"])
-            self.assistant_jobs._write(root, entries)
-        self._apply_action(root, state, policy.repair_ready(state, result["feedback_path"]))
+        intent = state.get("retiredReaderLaunchIntent")
+        if (isinstance(intent, dict) and intent.get("workflow_id") and isinstance(intent.get("parameters"), dict)
+                and isinstance(intent.get("before_task_ids"), list)
+                and not state.get("refs", {}).get(RETIRED_READER_STAGE)):
+            candidates = _intent_candidates(self._tasks(root), intent)
+            if len(candidates) == 1:
+                task = candidates[0]
+                state.setdefault("refs", {})[RETIRED_READER_STAGE] = {
+                    "workflow_id": task["workflow_id"], "task_id": task["task_id"],
+                }
+                self._save(root, state)
+        proof = {**state, "autoPending": intent}
+        if execution_guard().release_launch(root, proof, RETIRED_READER_STAGE):
+            state.pop("productionLaunchLease", None)
+            state.pop("retiredReaderLaunchIntent", None)
+            self._save(root, state)
 
     def _next_dispatch(self, root):
         from src.runtime_admission import is_closed
         if is_closed():
             return None
-        state = _read(root)
+        original = _read(root)
+        state = normalize_project_state(original)
+        if state != original:
+            self._save(root, state)
+        self._reconcile_retired_reader(root, state)
         if not _armed(state):
             return None
         policy = self.policy()
@@ -145,18 +156,13 @@ class NovelAutomation:
         checkpoint_check = getattr(policy, 'validate_checkpoint', None)
         if callable(checkpoint_check):
             checkpoint_check(root, state, stage)
-        if state.get("autoRepairPlanId"):
-            self._repair(root, state, policy)
-            return None
         tasks = self._tasks(root)
         intent = state.get("autoPending")
         ref = state.get("refs", {}).get(stage)
         if intent and not ref:
             if intent.get("stage") != stage or intent.get("workflow_id") != workflow_id:
                 raise ValueError("待启动任务与当前步骤不一致，请检查自动创作状态。")
-            candidates = [item for item in tasks if item["workflow_id"] == workflow_id
-                          and item["task_id"] not in intent.get("before_task_ids", [])
-                          and all(item.get("parameter_values", {}).get(key) == value for key, value in intent["parameters"].items())]
+            candidates = _intent_candidates(tasks, intent)
             if len(candidates) > 1:
                 raise ValueError("发现多个可能属于上次启动的任务，请手动确认，避免重复执行。")
             if candidates:
@@ -264,7 +270,7 @@ class NovelAutomation:
                 # Re-read after preparing dispatch; a concurrent pause cancels
                 # future launches while retaining the durable pending Task.
                 with self.lock:
-                    if not _armed(_read(root)):
+                    if not _armed(normalize_project_state(_read(root))):
                         return
                 result = await self.manager.run_task(ref["workflow_id"], ref["task_id"])
                 from src.runtime_admission import is_closed
@@ -277,6 +283,6 @@ class NovelAutomation:
             except Exception as error:
                 logger.exception("自动创作暂停: %s", root)
                 with self.lock:
-                    state = _read(root)
+                    state = normalize_project_state(_read(root))
                     if _armed(state):
                         self._pause(root, state, str(error) or "自动创作发生错误，请检查任务。")

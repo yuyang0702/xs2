@@ -5,9 +5,11 @@ import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import NovelResourceGate from './NovelResourceGate';
 
+Object.assign(globalThis, { React });
+
 const required = ['reference-distillation', 'novel-advisor', 'style-compatibility-advisor',
   'adopt-reference', 'build', 'character', 'story-plan', 'outline', 'mvp', 'polish',
-  'reader-sim', 'post-hoc', 'export'];
+  'post-hoc', 'export'];
 
 test('incomplete resources keep children unmounted and allow retry with renamed identities', async () => {
   const window = new Window();

@@ -34,9 +34,10 @@ from .novel_mechanism_recommender import generate_recommendations_file
 from .novel_reference_choices import with_reference_choices
 from .novel_progress import progress
 from .novel_repair import repair_context, prepare_repair, ensure_idle, preserve_legacy_report
-from .novel_chapters import chapter_context, chapter_removal_preview, remove_chapter
+from .novel_chapters import ChapterAction, chapter_context, chapter_removal_preview, remove_chapter
 from .novel_story_support import story_support
 from .novel_plugin import workflow_resources, console_service
+from .novel_state import normalize_project_state, preserve_reader_launch_history
 from .novel_workflow_models import novel_definition, model_settings, save_model_settings
 
 router = APIRouter(prefix="/api/novel-console", tags=["novel-console"])
@@ -453,7 +454,7 @@ def _list_projects():
             continue
         path = root / _manifest
         if path.is_file():
-            state = read_json_file(path, None)
+            state = normalize_project_state(read_json_file(path, None))
             if not isinstance(state, dict):
                 continue
         elif (root / "story").is_dir() or (root.name == "xs2-novel-workbench" and root.is_dir()):
@@ -472,7 +473,7 @@ def _list_projects():
 async def get_novel_progress(request: Request, workflow_id: str, workspace: str, chapter: str = ""):
     from .humanware_routes import character_workspace
     root = character_workspace(request, workflow_id, workspace)
-    state = read_json_file(root / _manifest, {})
+    state = normalize_project_state(read_json_file(root / _manifest, {}))
     try:
         service = getattr(console_service(), "progress", None)
         if service is None:
@@ -1178,7 +1179,7 @@ async def continuation_check(request: Request, workflow_id: str, workspace: str,
 
 @router.get('/chapters/context')
 async def novel_chapter_context(request: Request, workflow_id: str, workspace: str,
-                                chapter: str, action: Literal['write', 'repair', 'assess', 'audit'] = 'write'):
+                                chapter: str, action: ChapterAction = 'write'):
     mgr = _get_manager(request)
     root = mgr._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
     try:
@@ -1191,7 +1192,7 @@ class ChapterOpen(BaseModel):
     workflow_id: str
     workspace: str
     chapter: str = Field(pattern=r'^[0-9]{4}$')
-    action: Literal['write', 'repair', 'assess', 'audit'] = 'write'
+    action: ChapterAction = 'write'
 
 
 @router.post('/chapters/context')
@@ -1317,9 +1318,9 @@ async def save_project(payload: ProjectSave, request: Request):
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
     with _lock:
         manifest = safe_target(root, _manifest)
-        incoming = dict(payload.state)
+        incoming = normalize_project_state(payload.state)
         new_project = not manifest.is_file()
-        existing = read_json_file(manifest, {})
+        existing = normalize_project_state(read_json_file(manifest, {}))
         automation = getattr(request.app.state, "novel_automation", None)
         if automation and automation.has_active(root):
             raise HTTPException(409, "后台自动创作正在推进，请先暂停自动创作再修改作品设置")
@@ -1335,6 +1336,7 @@ async def save_project(payload: ProjectSave, request: Request):
         # without the new field must not reset them while saving settings.
         incoming["automaticRecovery"] = existing.get("automaticRecovery", {})
         incoming['automaticCheckpoint'] = existing.get('automaticCheckpoint')
+        preserve_reader_launch_history(existing, incoming)
         atomic_json(manifest, incoming)
         register_project(root, new_project=new_project)
     return {"success": True, "workspace": str(root), "revision": incoming["_revision"]}

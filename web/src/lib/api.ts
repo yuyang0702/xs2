@@ -523,10 +523,6 @@ export type NovelAssistantEntry = {
   suggestions?: { key: string; label: string; value: string; reason: string }[];
   configuration_base?: { mode: string; values: Record<string, string>; has_story_facts?: boolean; advisor_brief?: string };
   chapter?: string;
-  reader_summary?: string;
-  applied_at?: string;
-  feedback_path?: string;
-  applied_plan?: string;
 };
 
 export type NovelAdvisorTask = "discussion" | "topic_selection";
@@ -561,7 +557,8 @@ export type NovelChapterContext = {
   refs: Record<string, {workflow_id: string; task_id: string}>;
   completed: string[]; values: Record<string, string>; later_chapters: string[]; message: string;
 };
-export async function getNovelChapterContext(workflowId: string, workspace: string, chapter: string, action = "write") {
+export type NovelChapterAction = "write" | "audit" | "repair";
+export async function getNovelChapterContext(workflowId: string, workspace: string, chapter: string, action: NovelChapterAction = "write") {
   return request<NovelChapterContext>("/novel-console/chapters/context", {method:"POST",
     body:JSON.stringify({workflow_id:workflowId, workspace, chapter, action})});
 }
@@ -599,7 +596,7 @@ export async function askNovelAssistant(payload: {
   missing?: string[];
   candidates?: unknown[];
   conflict_plan?: Record<string, unknown>;
-  purpose?: "general" | "reader_repair" | "configure" | "advisor" | "plot";
+  purpose?: "general" | "configure" | "advisor" | "plot";
   advisor_task?: NovelAdvisorTask;
   chapter?: string;
   scope?: "book" | "volume" | "chapter";
@@ -608,15 +605,6 @@ export async function askNovelAssistant(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
-}
-
-export async function applyNovelRepairPlan(payload: { workflow_id: string; workspace: string; entry_id: string; plan: string }) {
-  return request<{ feedback_path: string; chapter: string; already_applied: boolean; model_id: string }>("/novel-console/repair/apply", {method: "POST", body: JSON.stringify(payload)});
-}
-
-export async function getNovelReaderReport(workflowId: string, workspace: string, chapter: string) {
-  const query = new URLSearchParams({workflow_id: workflowId, workspace, chapter});
-  return request<{report: Record<string, unknown>; chapter: string}>(`/novel-console/reader-report?${query}`);
 }
 
 export async function listWorkflows({ includeTaskStatus = true } = {}) {

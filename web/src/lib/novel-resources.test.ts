@@ -11,3 +11,10 @@ test('workbench uses installed resource identities and cannot invent missing wor
   setNovelResources({});
   assert.throws(() => novelWorkflowId('build'), /插件/);
 });
+
+test('a stale catalog cannot reintroduce the removed reader workflow', () => {
+  setNovelResources({mvp: 'new-write', 'reader-sim': 'old-reader'});
+  assert.equal(novelStageId('old-reader'), undefined);
+  assert.equal(novelStageId('new-write'), 'mvp');
+  setNovelResources({});
+});

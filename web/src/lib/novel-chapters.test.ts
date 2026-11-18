@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import {nextSerialChapter, selectProductionChapter} from "./novel-chapters";
-import {beginReaderRepair} from "./novel-repair-flow";
 
 const project = {
   index:9, stageId:"export", values:{chapter_number:"0001", human_intent:"第一章目标", latest_chapter:"0000"},
@@ -31,24 +30,32 @@ test("automatic serial continuation launches only target chapter and keeps batch
   assert.equal(next.autoLaunchStage,"mvp");
 });
 
-test("chapter assessment clears optional feedback instead of selecting a nonexistent default file", () => {
+test("chapter audit clears unrelated author feedback", () => {
   const current = {...project, values:{...project.values,
     author_feedback_file:"quality/repairs/0001/old.md"}};
-  const next = selectProductionChapter(current,{...context,chapter:"0001",has_body:true},"reader-sim",7,true);
+  const next = selectProductionChapter(current,{...context,chapter:"0001",has_body:true},"post-hoc",7);
   assert.equal(next.values.author_feedback_file,"");
   assert.equal(current.values.author_feedback_file,"quality/repairs/0001/old.md");
 });
 
 test("targeted revision uses target chapter refs and never inherits another chapter feedback", () => {
-  const current = {...project,values:{...project.values,chapter_number:"0003",author_feedback_file:"quality/repairs/0003/old.md"}};
-  const target = {...context,chapter:"0001",has_body:true,refs:{mvp:project.refs.mvp},completed:["mvp"]};
-  const next = beginReaderRepair(selectProductionChapter(current,target,"polish",6),6,"quality/repairs/0001/new.md","model");
+  const current = {...project,repairModel:"old-reader-model",readerRepairCount:2,
+    values:{...project.values,chapter_number:"0003",author_feedback_file:"quality/repairs/0003/old.md"}};
+  const target = {...context,chapter:"0001",has_body:true,
+    refs:{mvp:project.refs.mvp, "reader-sim":{workflow_id:"old-reader", task_id:"old-reader-task"}},
+    completed:["mvp", "reader-sim"]};
+  const next = selectProductionChapter(current,target,"polish",6);
   assert.equal(next.values.chapter_number,"0001");
   assert.equal(next.values.prev_chapter,"0000");
   assert.equal(next.refs.mvp.task_id,"body1");
-  assert.equal(next.values.author_feedback_file,"quality/repairs/0001/new.md");
-  assert.equal(next.repairReviewOnly,true);
-  assert.equal(next.autoScope,"short_full");
+  assert.equal(next.values.author_feedback_file, "");
+  assert.equal(next.repairModel, "");
+  assert.equal(next.readerRepairCount, 0);
+  assert.equal(next.stageId, "polish");
+  assert.equal(next.autoScope, "manual");
+  assert.equal(next.autoNext, false);
+  assert.deepEqual(Object.keys(next.refs).sort(), ["build", "mvp"]);
+  assert.deepEqual(next.completed, ["build", "character", "story-plan", "outline", "mvp"]);
 });
 
 test("reading or revising an early chapter cannot cause another copy of a written chapter", () => {

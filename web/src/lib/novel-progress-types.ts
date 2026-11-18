@@ -1,5 +1,5 @@
 export type ChapterLifecycle = {
-  chapter: string; plan: string; draft: string; assessment: string; confirmation: string; export: string;
+  chapter: string; plan: string; draft: string; confirmation: string; export: string;
 };
 type Usage = { basis: "ledger" | "summary"; models: string[]; total_tokens?: number; call_count?: number };
 type SavedNode = {
@@ -12,6 +12,6 @@ type SavedTask = {
 };
 export type NovelProgress = {
   percent: number; completed_count: number; total_count: number; label: string; chapter_count: number;
-  can_download: boolean; export_current: boolean; reader_verdict: string; lifecycle?: ChapterLifecycle; pause_reason?: string;
+  can_download: boolean; export_current: boolean; lifecycle?: ChapterLifecycle; pause_reason?: string;
   stages?: { id: string; label: string; completed: boolean; status: string; task?: SavedTask }[];
 };

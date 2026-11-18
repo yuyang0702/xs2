@@ -18,6 +18,13 @@ test('opening settings or moving reference modules keeps the existing production
   assert.equal(novelEntryStage({...draft,persisted:true,stageId:'adopt-reference',refs:{build:{},export:{}}},stages),'export');
 });
 
+test('an old reader stage resumes at post-hoc audit regardless of its saved numeric index', () => {
+  const production = [...stages.slice(0, -1), {id:'post-hoc'}, stages[stages.length - 1]];
+  const saved = {...draft,persisted:true,stageId:'reader-sim',index:production.length - 1,refs:{mvp:{}}};
+  assert.equal(novelEntryStage(saved, production),'post-hoc');
+  assert.equal(novelEntryStage({...saved,stageId:'export',index:0}, production),'export');
+});
+
 test('an optional adviser remains accessible without unlocking future production or leaving a running task', () => {
   assert.equal(canOpenNovelStage('novel-advisor','build',[],false),true);
   assert.equal(canOpenNovelStage('novel-advisor','mvp',['build'],false),true);

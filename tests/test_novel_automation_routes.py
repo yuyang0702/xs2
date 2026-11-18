@@ -101,6 +101,54 @@ def saved(control):
     return json.loads((control.root / ".novel-project.json").read_text(encoding="utf-8"))
 
 
+def test_workbench_status_and_manual_save_migrate_the_legacy_stage_with_history(control):
+    old_ref = {"workflow_id": "old-reader", "task_id": "old"}
+    legacy = {**control.original, "stageId": "reader-sim", "autoLaunchStage": "reader-sim",
+              "assessmentOnly": True, "autoRepairPlanId": "outdated", "refs": {"reader-sim": old_ref}}
+    novel_routes.atomic_json(control.root / ".novel-project.json", legacy)
+    response = control.client.get("/api/novel-console/automation", params={
+        "workflow_id": "renamed-build", "workspace": str(control.root)})
+    assert response.status_code == 200, response.text
+    view = response.json()["state"]
+    assert view["stageId"] == "post-hoc" and not view.get("assessmentOnly")
+    assert view["refs"]["reader-sim"] == old_ref
+    assert saved(control) == legacy
+    result = control.client.put("/api/novel-console/projects", json=payload(control, legacy))
+    assert result.status_code == 200, result.text
+    assert saved(control)["stageId"] == "post-hoc"
+    assert not saved(control).get("autoRepairPlanId")
+    assert saved(control)["refs"]["reader-sim"] == old_ref
+
+
+def test_status_maps_legacy_reader_pause_without_arming_or_overwriting_history(control):
+    reason = "已达到本章自动返修次数上限，请查看正文与读者报告。"
+    legacy = {**control.original, "stageId": "post-hoc", "autoPauseReason": reason}
+    novel_routes.atomic_json(control.root / ".novel-project.json", legacy)
+    response = control.client.get("/api/novel-console/automation", params={
+        "workflow_id": "renamed-build", "workspace": str(control.root)})
+    assert response.status_code == 200, response.text
+    state = response.json()["state"]
+    assert "正文" in state["autoPauseReason"] and "审核" in state["autoPauseReason"]
+    assert "读者" not in state["autoPauseReason"] and not state.get("autoArmed")
+    assert saved(control) == legacy
+
+
+def test_explicit_start_migrates_old_production_stage_but_rejects_retired_assessment_only(control):
+    control.policy.STAGES = ("build", "post-hoc")
+    reader = {"stage": "reader-sim", "workflow_id": "old-reader", "task_id": "old"}
+    legacy = {**control.original, "stageId": "reader-sim", "autoPending": reader}
+    novel_routes.atomic_json(control.root / ".novel-project.json", legacy)
+    url = "/api/novel-console/automation/start"
+    rejected = control.client.post(url, json=payload(control, {**legacy, "assessmentOnly": True}))
+    assert rejected.status_code == 409 and saved(control) == legacy
+    eligible = control.client.post(url, json=payload(control, legacy))
+    assert eligible.status_code == 200, eligible.text
+    current = eligible.json()["state"]
+    assert current["stageId"] == "post-hoc" and current["autoArmed"]
+    assert not current.get("autoPending")
+    assert current["refs"]["reader-sim"] == {"workflow_id": "old-reader", "task_id": "old"}
+
+
 def test_start_compares_revision_and_rejects_double_start(control):
     before = saved(control)
     stale = control.client.post("/api/novel-console/automation/start", json=payload(control, {**before, "_revision": 0}))

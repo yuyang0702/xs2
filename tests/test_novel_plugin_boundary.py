@@ -10,13 +10,15 @@ def test_console_uses_installed_owner_identity_and_rejects_disabled_owner():
     from src.web.novel_plugin import workflow_resources
     resolver = ResourceIdResolver()
     resolver.register(build_resource_id_plan('xs2-novel-flywheel', 'my-library',
-                                           {'workflows': ['build', 'character', 'mvp']}))
+                                           {'workflows': ['build', 'character', 'mvp', 'reader-sim']}))
     manager = SimpleNamespace(resource_resolver=resolver, is_running=lambda owner: True)
     workflows = SimpleNamespace(list_workflows=lambda: {'workflows': [
         {'workflow_id': 'my-library-build'}, {'workflow_id': 'my-library-character'},
-        {'workflow_id': 'my-library-mvp'}, {'workflow_id': 'another-mvp'}]})
+        {'workflow_id': 'my-library-mvp'}, {'workflow_id': 'my-library-reader-sim'},
+        {'workflow_id': 'another-mvp'}]})
     assert workflow_resources(manager, workflows) == {
         'build': 'my-library-build', 'character': 'my-library-character', 'mvp': 'my-library-mvp'}
+    assert resolver.mapping_for('workflow', 'my-library-reader-sim').local_id == 'reader-sim'
     manager.is_running = lambda owner: False
     with pytest.raises(ValueError, match='插件'):
         workflow_resources(manager, workflows)

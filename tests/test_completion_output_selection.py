@@ -102,6 +102,25 @@ def test_declared_schema_rejects_invalid_shapes(text):
     assert select_agent_output(trajectory(text), {"output_selection": "completion_tool_message", "json_output_schema": schema})[1]
 
 
+@pytest.mark.parametrize(("constraint", "detail"), [
+    ({"maxItems": 10}, "11 items, expected maxItems=10"),
+    ({"contains": {"required": ["focus"]}}, "no item satisfies contains"),
+])
+def test_schema_array_error_does_not_echo_the_report(constraint, detail):
+    from src.workflow.output_selection import select_agent_output
+
+    report = {"expression_checks": [{"evidence": "original manuscript passage " * 300}] * 11}
+    schema = {"type": "object", "properties": {"expression_checks": {"type": "array", **constraint}}}
+    output, error = select_agent_output(trajectory(json.dumps(report)), {
+        "output_selection": "completion_tool_message", "json_output_schema": schema,
+    })
+
+    assert not output
+    assert "$.expression_checks" in error
+    assert detail in error
+    assert "original manuscript passage" not in error
+
+
 @pytest.mark.parametrize("text", ['{"chapters": [], "x": NaN}', '{"chapters": [], "chapters": [1]}'])
 def test_strict_json_rejects_constants_and_duplicate_keys(text):
     assert select(trajectory(text))[1]

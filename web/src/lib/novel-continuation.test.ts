@@ -35,3 +35,9 @@ test("a valid plan keeps the current writing stage as the next action", () => {
   );
   assert.equal(nextNovelStageAfterReferenceAdoption([...setupComplete, "mvp"], "polish"), "polish");
 });
+
+test("a polished chapter proceeds to audit without needing a reader receipt", () => {
+  const written = [...setupComplete, "mvp", "polish"];
+  assert.equal(nextNovelStageAfterReferenceAdoption(written, "reader-sim"), "post-hoc");
+  assert.equal(nextNovelStageAfterReferenceAdoption([...written, "post-hoc"], "polish"), "export");
+});

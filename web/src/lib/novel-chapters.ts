@@ -1,6 +1,7 @@
 import type {NovelChapterContext} from "./api";
 
-const PRODUCTION = ["mvp", "polish", "reader-sim", "post-hoc", "export"];
+export const NOVEL_PRODUCTION_STAGES = ["mvp", "polish", "post-hoc", "export"];
+const CHAPTER_OWNED_STAGES = [...NOVEL_PRODUCTION_STAGES, "reader-sim"];
 type ChapterProject = {
   values: Record<string, string>; refs: Record<string, {workflow_id:string;task_id:string}>;
   completed: string[]; index: number; stageId?: string;
@@ -24,11 +25,13 @@ export function selectProductionChapter<T extends ChapterProject>(
   // Book preparation and adopted style survive; production refs are chapter-owned.
   return {...current, index, stageId, autoNext: automatic,
     autoScope: automatic ? "serial_batch" as const : "manual" as const,
-    autoLaunchStage: automatic ? stageId : "", autoPending: null, autoRepairPlanId: "", autoPauseReason: "",
-    repairReviewOnly: false, assessmentOnly: false, repairModel: "", readerRepairCount: 0,
+    autoLaunchStage: automatic ? stageId : "", autoPending: null, autoPauseReason: "",
+    repairReviewOnly: false, repairModel: "", readerRepairCount: 0,
     continuationIssue: null, chapterDrafts,
-    refs: {...Object.fromEntries(Object.entries(project.refs).filter(([id]) => !PRODUCTION.includes(id))), ...context.refs},
-    completed: [...new Set([...project.completed.filter(id => !PRODUCTION.includes(id)), ...context.completed])],
+    refs: {...Object.fromEntries(Object.entries(project.refs).filter(([id]) => !CHAPTER_OWNED_STAGES.includes(id))),
+      ...Object.fromEntries(Object.entries(context.refs).filter(([id]) => id !== 'reader-sim'))},
+    completed: [...new Set([...project.completed.filter(id => !CHAPTER_OWNED_STAGES.includes(id)),
+      ...context.completed.filter(id => id !== 'reader-sim')])],
     values: {...project.values, human_intent: same ? project.values.human_intent || "" : "",
       world_intent: same ? project.values.world_intent || "" : "",
       chapter_ending_mode: "continue", ...context.values,

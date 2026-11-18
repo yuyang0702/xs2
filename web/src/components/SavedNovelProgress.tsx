@@ -10,7 +10,6 @@ const labels: Record<string, string> = {
 const lifecycleLabels: Array<[keyof Omit<ChapterLifecycle, "chapter">, string, Record<string, string>]> = [
   ["plan", "规划", { planned: "已有计划", stale: "依据失效", missing: "暂无计划" }],
   ["draft", "正文", { present: "已有正文", missing: "暂无正文" }],
-  ["assessment", "读者评估", { pass: "通过", revise: "建议返修", reject: "未通过", missing: "暂无评估", unverified: "报告待复核" }],
   ["confirmation", "确认档案", { verified: "证据有效", stale: "证据失效", missing: "尚无确认记录" }],
   ["export", "导出", { recorded: "本章已列入导出", stale: "导出已过期", missing: "暂无本章导出", unknown: "导出范围待确认" }],
 ];
@@ -43,7 +42,7 @@ export function SelectedChapterLifecycle({ workflowId, workspace, chapter }: { w
 }
 
 export default function SavedNovelProgress({ progress }: { progress: NovelProgress }) {
-  const stages = progress.stages?.filter(stage => stage.task) || [];
+  const stages = progress.stages?.filter(stage => stage.task && stage.id !== "reader-sim") || [];
   return <div className="space-y-4">
     {progress.lifecycle && <ChapterLifecycleSummary lifecycle={progress.lifecycle} />}
     {progress.pause_reason && <p className="break-words text-xs text-muted-foreground">自动创作 · {progress.pause_reason}</p>}

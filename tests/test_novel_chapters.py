@@ -111,3 +111,41 @@ def test_chapter_open_route_validates_and_does_not_create_or_overwrite_prose(tmp
         assert list(root.iterdir())==[]
         assert client.post("/api/novel-console/chapters/context",json={**payload,"chapter":"../2"}).status_code==422
         assert client.post("/api/novel-console/chapters/context",json={**payload,"action":"repair"}).status_code==409
+
+
+def test_chapter_routes_retire_assess_but_keep_audit_repair_and_historical_report(tmp_path, monkeypatch):
+    root = tmp_path / "book"
+    flow = tmp_path / "workflows"
+    manuscript = body(root, "0001")
+    report = {"chapter_number": "0001", "body_sha256": digest(manuscript), "verdict": "revise"}
+    report_file = root / "story/0001/reader_report.json"
+    save(report_file, report)
+    task(flow, root, "mvp", "0001", "draft")
+    task(flow, root, "polish", "0001", "polished")
+    task(flow, root, "reader-sim", "0001", "old-assessment")
+    task(flow, root, "post-hoc", "0001", "archived")
+    exported = root / "export/manuscript.md"
+    exported.parent.mkdir()
+    exported.write_bytes(manuscript.read_bytes())
+    manager = SimpleNamespace(
+        _ws_manager=SimpleNamespace(resolve_workflow_workspace=lambda _id, override=None: Path(override)),
+        get_workflow_execution_policy=lambda _id: "public",
+        is_workflow_owner_enabled=lambda _id: True,
+    )
+    app = FastAPI()
+    app.include_router(novel_routes.router)
+    app.state.workflow_manager = manager
+    monkeypatch.setattr(novel_routes, "DATA_DIR", tmp_path)
+    with TestClient(app) as client:
+        path = "/api/novel-console/chapters/context"
+        payload = {"workflow_id": "test", "workspace": str(root), "chapter": "0001"}
+        assert client.get(path, params={**payload, "action": "assess"}).status_code == 422
+        assert client.post(path, json={**payload, "action": "assess"}).status_code == 422
+        assert set(client.get(path, params=payload).json()["refs"]) == {"mvp", "polish", "post-hoc"}
+        assert set(client.post(path, json={**payload, "action": "audit"}).json()["refs"]) == {"mvp", "polish"}
+        assert set(client.post(path, json={**payload, "action": "repair"}).json()["refs"]) == {"mvp"}
+        assert client.get("/api/novel-console/reader-report", params=payload).json()["report"] == report
+        response = client.get("/api/novel-console/export/download", params=payload)
+        assert response.status_code == 200 and response.content == manuscript.read_bytes()
+    assert json.loads(report_file.read_text(encoding="utf-8")) == report
+    assert repair_context(root, "0001", flow)["reader_task_id"] == "old-assessment"

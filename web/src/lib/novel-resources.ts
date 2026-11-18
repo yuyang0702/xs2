@@ -6,7 +6,7 @@ let bookDefaults: BookDefaults = {};
 // for a particular book. Validate their identities before mounting that UI.
 const requiredWorkflows = ['reference-distillation', 'novel-advisor', 'style-compatibility-advisor',
   'adopt-reference', 'build', 'character', 'story-plan', 'outline', 'mvp', 'polish',
-  'reader-sim', 'post-hoc', 'export'];
+  'post-hoc', 'export'];
 
 export function validateNovelResources(value: unknown): asserts value is Record<string, string> {
   const resources = value && typeof value === 'object' && !Array.isArray(value)
@@ -17,6 +17,7 @@ export function validateNovelResources(value: unknown): asserts value is Record<
 
 export function setNovelResources(value: Record<string, string>, defaults:BookDefaults={}) {
   workflows = {...value};
+  delete workflows['reader-sim'];
   bookDefaults = structuredClone(defaults);
 }
 

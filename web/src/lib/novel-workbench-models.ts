@@ -1,5 +1,5 @@
 import { request } from "./http-client";
-import type { WorkflowDefinition, WorkflowTask } from "../types";
+import type { WorkflowTask } from "../types";
 
 export type NovelModelNode = {
   id: string; label: string; override: string; effective_model: string;
@@ -14,13 +14,6 @@ export function saveNovelModels(settings: NovelModelSettings, nodeModels: Record
   return request<NovelModelSettings>("/novel-console/workflow-models", {
     method: "PATCH", body: JSON.stringify({ workflow_id: settings.workflow_id, expected_digest: settings.digest, node_models: nodeModels }),
   });
-}
-
-// A reader's temporary repair choice must never replace an explicit Workflow
-// node choice or a parameter binding when manual/automatic tasks are created.
-export function repairNodeModels(definition: WorkflowDefinition, model: string) {
-  return Object.fromEntries(definition.nodes.filter(node => node.node_type === "agent" &&
-    !node.model_override && !node.var_bindings?.model_override?.var_key).map(node => [node.id, model]));
 }
 
 type RecordedUsageState = {

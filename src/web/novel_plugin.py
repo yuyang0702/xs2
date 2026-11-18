@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from src.workflow.script_library import get_script_library
+from .novel_state import RETIRED_READER_STAGE
 
 OWNER = 'xs2-novel-flywheel'
 
@@ -53,7 +54,7 @@ def workflow_resources(extension_manager, workflow_manager) -> dict[str, str]:
     result = {}
     for item in items:
         identity = extension_manager.resource_resolver.mapping_for('workflow', item['workflow_id'])
-        if identity and identity.plugin_id == OWNER:
+        if identity and identity.plugin_id == OWNER and identity.local_id != RETIRED_READER_STAGE:
             result[identity.local_id] = identity.effective_id
     return result
 

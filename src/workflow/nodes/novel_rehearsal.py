@@ -129,10 +129,22 @@ class NovelRehearsalNode(BaseNodePlugin):
                     ctx.shared_ws, ctx.task_id, writer_id, chapter,
                     values.get("multi_dir", ""), slot, style, call, model_identity=identity, **options,
                 )
+            outputs = {f"rehearsal_{writer_id}": output}
+            compact_context = "single_writer_compact_context_file"
+            project_context = getattr(service, "prepare_writer_context", None)
+            if compact_short and project_context and any(
+                variable.key == compact_context and variable.type == "file" for variable in ctx.definition.variables
+            ):
+                context_path, scene_path = project_context(
+                    ctx.shared_ws, values["multi_dir"], values["short_context_file"], output,
+                )
+                outputs[compact_context] = context_path
+                outputs["single_writer_context"] = "{{single_writer_compact_context_file}}"
+                outputs[f"rehearsal_{writer_id}"] = scene_path
             result = NodeResult(
                 status="completed",
                 summary=f"声线审核通过，已交接 {count} 场人物试演。" if count else "当前场景没有需要试演、且档案可匹配的出场人物。",
-                outputs={f"rehearsal_{writer_id}": output},
+                outputs=outputs,
             )
         except ValueError as error:
             result = NodeResult(status="failed", error=str(error))

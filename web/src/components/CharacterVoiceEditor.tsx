@@ -186,6 +186,6 @@ export default function CharacterVoiceEditor({ workspaceId, workflowId }: Charac
       {legacyEditing ? <><textarea aria-label="声音原文" value={legacyDraft} onChange={event => setLegacyDraft(event.target.value)} rows={18} disabled={busy} className="w-full rounded-xl border border-border bg-background p-4 text-sm leading-7" /><div className="mt-3 flex gap-2"><button onClick={() => void write('legacy')} disabled={busy || !legacyChanged} className={primaryClass}>保存原文</button><button onClick={() => { setLegacyDraft(document?.content || ''); setLegacyEditing(false); }} disabled={busy} className={buttonClass}>撤销原文修改</button></div></> : <MarkdownRenderer content={legacyContent} className={readingClass} />}
     </section>}
     {!loading && document && !characters.length && !legacyContent && !legacyEditing && <div className={`${cardClass} text-sm leading-7 text-muted-foreground`}><p>还没有人物声音。先完成角色创建，或根据现有人物档案创建待填写模板。</p><button onClick={() => setLegacyEditing(true)} className={`${buttonClass} mt-3`}>手动填写声音</button></div>}
-    <p className="text-xs leading-6 text-muted-foreground">已保存的声音会供后续写作任务读取。请结合正文和读者评估，检查人物是否在实际场景中保持一致；无需给每个人强加口头禅。</p>
+    <p className="text-xs leading-6 text-muted-foreground">已保存的声线会供后续写作任务读取。可在章节正文中核对人物在实际场景里的说话方式。</p>
   </div>;
 }

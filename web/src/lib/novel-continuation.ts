@@ -1,3 +1,5 @@
+import { NOVEL_PRODUCTION_STAGES } from "./novel-chapters";
+
 export type NovelContinuationCheck = {
   ready: boolean;
   action: string;
@@ -9,7 +11,6 @@ export type NovelContinuationCheck = {
 };
 
 const SETUP_STAGES = ["build", "character", "story-plan", "outline"];
-const PRODUCTION_STAGES = ["mvp", "polish", "reader-sim", "post-hoc", "export"];
 
 export function nextNovelStageAfterReferenceAdoption(
   completed: string[],
@@ -19,10 +20,10 @@ export function nextNovelStageAfterReferenceAdoption(
   const firstMissingSetup = SETUP_STAGES.find((stage) => !completed.includes(stage));
   if (firstMissingSetup) return firstMissingSetup;
 
-  const currentProductionStage = PRODUCTION_STAGES.includes(currentStageId) ? currentStageId : "";
+  const currentProductionStage = NOVEL_PRODUCTION_STAGES.includes(currentStageId) ? currentStageId : "";
   const nextProductionStage = currentProductionStage && !completed.includes(currentProductionStage)
     ? currentProductionStage
-    : PRODUCTION_STAGES.find((stage) => !completed.includes(stage)) || "export";
+    : NOVEL_PRODUCTION_STAGES.find((stage) => !completed.includes(stage)) || "export";
 
   if (nextProductionStage === "mvp" && check && !check.ready) {
     return check.action || "outline";

@@ -4,13 +4,17 @@ from datetime import datetime, timezone
 import hashlib
 import re
 import shutil
+from typing import Literal
 from uuid import uuid4
 
 from .novel_library import read_json
 from .novel_repair import ensure_idle
 from .novel_plugin import task_files
+from .novel_state import AUDIT_STAGE, RETIRED_READER_STAGE, normalize_project_state
 
-PRODUCTION = ("mvp", "polish", "reader-sim", "post-hoc", "export")
+PRODUCTION = ("mvp", "polish", AUDIT_STAGE, "export")
+PRODUCTION_HISTORY = (*PRODUCTION, RETIRED_READER_STAGE)
+ChapterAction = Literal["write", "audit", "repair"]
 
 
 def chapter_id(value):
@@ -19,7 +23,7 @@ def chapter_id(value):
     return value
 
 
-def chapter_tasks(root, workflows_dir, chapter):
+def chapter_tasks(root, workflows_dir, chapter, *, stages=PRODUCTION_HISTORY):
     result = {}
     reset_dates = [read_json(path, {}).get("reset_at") for path in
                    (root / "archive/chapter_resets").glob("[0-9][0-9][0-9][0-9].json")
@@ -28,7 +32,7 @@ def chapter_tasks(root, workflows_dir, chapter):
         result = datetime.fromisoformat(value)
         return result if result.tzinfo else result.replace(tzinfo=timezone.utc)
     reset_at = max((timestamp(value) for value in reset_dates if value), default=None)
-    for stage in PRODUCTION:
+    for stage in stages:
         tasks = []
         for path in task_files(workflows_dir, stage):
             task = read_json(path, {})
@@ -56,14 +60,16 @@ def chapter_tasks(root, workflows_dir, chapter):
     return result
 
 
-def chapter_context(root, workflows_dir, chapter, action="write"):
+def chapter_context(root, workflows_dir, chapter, action: ChapterAction = "write"):
     chapter_id(chapter)
+    if action not in {"write", "audit", "repair"}:
+        raise ValueError("请选择写作、审核或返修。")
     ensure_idle(root, workflows_dir)
     body = root / f"story/{chapter}/chapter.md"
     has_body = body.is_file() and bool(body.read_text(encoding="utf-8").strip())
     if action != "write" and not has_body:
         raise ValueError("本章还没有正文，请先完成正文生成。")
-    tasks = chapter_tasks(root, workflows_dir, chapter)
+    tasks = chapter_tasks(root, workflows_dir, chapter, stages=PRODUCTION)
     refs = {stage: {"workflow_id": task["workflow_id"], "task_id": task["task_id"]}
             for stage, task in tasks.items()}
     completed = [stage for stage, task in tasks.items() if task.get("status") == "completed"]
@@ -79,7 +85,7 @@ def chapter_context(root, workflows_dir, chapter, action="write"):
     plan = read_json(root / f"planning/chapters/{chapter}.json", {})
     if not has_body and isinstance(plan, dict) and plan.get("goal"):
         values["human_intent"] = plan["goal"]
-    target = {"assess": "reader-sim", "audit": "post-hoc", "repair": "polish"}.get(action)
+    target = {"audit": AUDIT_STAGE, "repair": "polish"}.get(action)
     if target:
         invalidated = PRODUCTION[PRODUCTION.index(target):]
         refs = {stage: ref for stage, ref in refs.items() if stage not in invalidated}
@@ -153,7 +159,7 @@ def remove_chapter(root, workflows_dir, chapter, operation, expected_sha256, exp
         "archive/hooks.json", "archive/debts.json", "archive/current_status.json",
         "meta/hooks.md", "meta/debts.md", "meta/current_characters.md",
         "meta/current_world.md", "meta/story_timeline.md")]
-    state = read_json(state_path, {})
+    state = normalize_project_state(read_json(state_path, {}))
     missing_snapshots = [path for path in snapshots if not path.exists()]
     moved = []
     backup.mkdir(parents=True)
@@ -176,12 +182,11 @@ def remove_chapter(root, workflows_dir, chapter, operation, expected_sha256, exp
         current = str(state.get("values", {}).get("chapter_number", chapter)).zfill(4)
         state.setdefault("values", {})["latest_chapter"] = status.get("updated_chapter") or "0000"
         if operation == "regenerate" or chapter <= current:
-            state["refs"] = {key: value for key, value in state.get("refs", {}).items() if key not in PRODUCTION}
-            state["completed"] = [key for key in state.get("completed", []) if key not in PRODUCTION]
+            state["refs"] = {key: value for key, value in state.get("refs", {}).items() if key not in PRODUCTION_HISTORY}
+            state["completed"] = [key for key in state.get("completed", []) if key not in PRODUCTION_HISTORY]
             state.update(stageId="mvp", index=5, autoNext=False, autoScope="manual",
                          autoLaunchStage="", autoPauseReason="", readerRepairCount=0,
-                         repairModel="", repairReviewOnly=False, assessmentOnly=False,
-                         autoRepairPlanId="", continuationIssue=None, automaticCheckpoint=None)
+                         repairModel="", repairReviewOnly=False, continuationIssue=None, automaticCheckpoint=None)
         if operation == "regenerate" or chapter == current:
             if chapter != current:
                 state["values"].update(human_intent="", world_intent="", chapter_ending_mode="continue")
@@ -207,7 +212,7 @@ def remove_chapter(root, workflows_dir, chapter, operation, expected_sha256, exp
                           f"\n本章目标：{state['values'].get('human_intent', '')}。"
                           f"\n章节标题：{plan.get('title', '沿用现有大纲')}。"
                           f"\n保留章节号、标题、中文对白引号和自然段落。{ending}"
-                          "完成后按原有流程润色、读者评估、必要返修、质量审核与导出。")
+                          "完成后按创作流程审核并导出，需要时可局部润色。")
         state["_revision"] = state.get("_revision", 0) + 1
         save_json(state_path, state)
         return {**receipt, "state": state}

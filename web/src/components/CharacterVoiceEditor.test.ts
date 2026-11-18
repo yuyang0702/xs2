@@ -11,9 +11,7 @@ const React = await import("react");
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const { createRoot } = await import("react-dom/client");
-const { renderToStaticMarkup } = await import("react-dom/server");
 const { default: CharacterVoiceEditor } = await import("./CharacterVoiceEditor");
-const { default: HumanwareScoreCard } = await import("./HumanwareScoreCard");
 let root: ReturnType<typeof createRoot> | undefined;
 const originalFetch = globalThis.fetch;
 let posts: Record<string, unknown>[];
@@ -125,12 +123,4 @@ test("voice editor encodes full Windows workspace and preserves drafts when busy
   assert.deepEqual(mutation.body, { workflow_id: 'custom-character', workspace, content: 'existing voice updated' });
   assert.match(document.querySelector('[role="alert"]')?.textContent || '', /本书正在处理/);
   assert.equal(document.querySelector('textarea')?.value, 'existing voice updated');
-});
-
-test("unsupported humanware capability renders no invented score", () => {
-  const html = renderToStaticMarkup(createElement(HumanwareScoreCard, {
-    score: { supported: false, message: '请使用模拟读者报告' },
-  } as never));
-  assert.ok(html.includes('请使用模拟读者报告'));
-  assert.ok(!html.includes('/ 100'));
 });

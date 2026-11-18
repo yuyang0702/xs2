@@ -26,7 +26,7 @@ function Preview({ workspace }: { workspace: string }) {
 }
 function progress(label: string): NovelProgress {
   return { label, percent: 0, completed_count: 0, total_count: 9, chapter_count: 0, can_download: false,
-    export_current: false, reader_verdict: "" };
+    export_current: false };
 }
 async function deliver(index: number, label: string) {
   await act(async () => reads[index].resolve(new Response(JSON.stringify(progress(label)))));

@@ -77,6 +77,100 @@ def state(root):
     return json.loads((root / ".novel-project.json").read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("pointer", ["stageId", "autoLaunchStage"])
+def test_retired_reader_intent_continues_at_audit_without_a_writer_or_plan(tmp_path, pointer):
+    root, manager, service = setup(tmp_path)
+    task = manager.create_task("legacy-reader", parameter_values={}, workspace_override=str(root))
+    task["status"] = "completed"
+    manager.save(task)
+    reader_ref = {"workflow_id": "legacy-reader", "task_id": task["task_id"]}
+    service.policy = lambda: SimpleNamespace(STAGES=("mvp", "polish", "post-hoc", "export"),
+        launch_check=lambda *_args: None, parameters=lambda *_args: {}, model_overrides=lambda *_args: None)
+    service.resources = lambda: {stage: stage for stage in (*service.policy().STAGES, "reader-sim")}
+    data = state(root)
+    data.update({pointer: "reader-sim", "stageId": "reader-sim" if pointer == "stageId" else "polish",
+                 "autoRepairPlanId": "old-plan", "refs": {"reader-sim": reader_ref},
+                 "automaticCheckpoint": {"stage": "reader-sim"},
+                 "autoPending": {**reader_ref, "stage": "reader-sim"}})
+    write(root / ".novel-project.json", data)
+    asyncio.run(service.tick(root))
+    assert [item["workflow_id"] for item in manager.created] == ["legacy-reader", "post-hoc"]
+    assert manager.started == ["task-2"]
+    updated = state(root)
+    assert updated["stageId"] == "post-hoc"
+    assert updated["refs"]["reader-sim"] == reader_ref
+    assert not updated.get("autoRepairPlanId") and not updated.get("automaticCheckpoint")
+    assert manager.get_task("legacy-reader", task["task_id"])["status"] == "completed"
+
+
+@pytest.mark.parametrize("legacy", [
+    {"stageId": "reader-sim", "assessmentOnly": True},
+    {"stageId": "polish", "assessmentOnly": True},
+    {"stageId": "polish", "autoRepairPlanId": "dangling-reader-plan"},
+    {"stageId": "polish", "autoPending": {"stage": "reader-sim"}},
+])
+def test_legacy_assessment_or_dangling_plan_cannot_start_any_task(tmp_path, legacy):
+    root, manager, service = setup(tmp_path)
+    data = state(root) | legacy
+    write(root / ".novel-project.json", data)
+    asyncio.run(service.tick(root))
+    updated = state(root)
+    assert manager.created == [] and manager.started == []
+    assert not updated["autoArmed"] and not updated["autoNext"]
+    assert not updated.get("assessmentOnly") and not updated.get("autoRepairPlanId")
+    if legacy["stageId"] == "reader-sim":
+        assert updated["stageId"] == "post-hoc"
+
+
+def test_obsolete_pending_reader_task_is_kept_without_being_dispatched(tmp_path):
+    root, manager, service = setup(tmp_path)
+    task = manager.create_task("legacy-reader", parameter_values={}, workspace_override=str(root))
+    reader_ref = {"workflow_id": "legacy-reader", "task_id": task["task_id"]}
+    token = {"stage": "reader-sim", "lease": {"scope": "book/manuscript"}}
+    original = state(root) | {"stageId": "reader-sim", "productionLaunchLease": token,
+                             "autoPending": {"stage": "reader-sim", **reader_ref}}
+    service.policy = lambda: SimpleNamespace(STAGES=("post-hoc",))
+    service.resources = lambda: {"reader-sim": "legacy-reader", "post-hoc": "audit"}
+    write(root / ".novel-project.json", original)
+    asyncio.run(service.tick(root))
+    updated = state(root)
+    assert manager.started == [] and len(manager.created) == 1
+    assert updated["stageId"] == "post-hoc" and not updated["autoArmed"]
+    assert updated["productionLaunchLease"] == token
+    assert updated["refs"]["reader-sim"] == reader_ref
+    assert manager.get_task("legacy-reader", task["task_id"])["status"] == "pending"
+
+
+def test_retired_reader_recovers_native_task_created_before_ref_was_saved(tmp_path, monkeypatch):
+    root, manager, service = setup(tmp_path)
+    (tmp_path / "src").mkdir()
+    manager.directory = service.workflows_dir = tmp_path / "data/workflows"
+    monkeypatch.setenv("DETERMINFLOW_PROJECT_DIR", str(tmp_path))
+    guard = policy().execution_guard()
+    data = state(root) | {"stageId": "reader-sim"}
+    guard.reserve_launch(root, data, "reader-sim")
+    parameters = {"chapter_number": "0001"}
+    previous = manager.create_task("legacy-reader", parameter_values=parameters, workspace_override=str(root))
+    manager.save(previous | {"status": "completed"})
+    task = manager.create_task("legacy-reader", parameter_values=parameters, workspace_override=str(root))
+    data["autoPending"] = {"stage": "reader-sim", "workflow_id": "legacy-reader",
+                           "before_task_ids": [previous["task_id"]], "parameters": parameters}
+    write(root / ".novel-project.json", data)
+
+    with pytest.raises(ValueError, match="任务正在处理"):
+        service._next_dispatch(root)
+    assert state(root)["refs"]["reader-sim"] == {"workflow_id": "legacy-reader", "task_id": task["task_id"]}
+    assert state(root)["productionLaunchLease"] == data["productionLaunchLease"]
+    assert manager.get_task("legacy-reader", task["task_id"])["status"] == "pending"
+
+    service.pause(root)
+    manager.save(task | {"status": "stopped"})
+    assert service._next_dispatch(root) is None
+    assert "productionLaunchLease" not in state(root)
+    assert guard.reserve_launch(root, data | {"stageId": "post-hoc"}, "post-hoc")
+    assert len(manager.created) == 2 and not manager.started
+
+
 def test_legacy_auto_flag_does_not_start_on_deployment(tmp_path):
     root, manager, service = setup(tmp_path)
     data = state(root); data.pop("autoArmed"); write(root / ".novel-project.json", data)
@@ -165,18 +259,13 @@ def test_parameter_contract_filters_outputs_files_and_keeps_approved_feedback(tm
     assert params["conflict_plan_mode"] == "short_full"
 
 
-def test_reader_reject_blocks_archive_and_missing_artifact_blocks_advance(tmp_path):
+def test_missing_artifact_blocks_advance(tmp_path):
     root, manager, service = setup(tmp_path)
     asyncio.run(service.tick(root))
     task = manager.get_task("custom-build", "task-1"); task["status"] = "completed"; manager.save(task)
     asyncio.run(service.tick(root))
     assert not state(root)["autoNext"]
     assert state(root)["stageId"] == "build"
-    data = state(root); data.update(stageId="reader-sim", autoNext=True, autoArmed=True, readerRepairCount=2, autoRepairLimit=2)
-    folder = root / "story/0001"; folder.mkdir(parents=True); (folder / "chapter.md").write_text("body")
-    write(folder / "reader_report.json", {"verdict": "reject", "chapter_number": "0001"})
-    decision = policy().next_action(root, data, "reader-sim")
-    assert decision["action"] == "pause"
 
 
 def test_serial_limits_final_chapter_and_existing_body_stop_batch(tmp_path):
@@ -193,62 +282,26 @@ def test_serial_limits_final_chapter_and_existing_body_stop_batch(tmp_path):
     assert policy().next_action(root, data, "export")["action"] == "finish"
 
 
-def test_assessment_only_and_repair_review_only_stop_at_requested_boundary(tmp_path):
+def test_repair_review_only_stops_after_post_hoc_audit(tmp_path):
     root, _, _ = setup(tmp_path)
     folder = root / "story/0001"; folder.mkdir(parents=True); (folder / "chapter.md").write_text("body")
-    write(folder / "reader_report.json", {"verdict": "pass", "chapter_number": "0001"})
-    data = state(root); data["assessmentOnly"] = True
-    assert policy().next_action(root, data, "reader-sim")["action"] == "finish"
-    data.update(assessmentOnly=False, repairReviewOnly=True)
-    assert policy().next_action(root, data, "reader-sim")["stage"] == "post-hoc"
+    data = state(root) | {"repairReviewOnly": True}
     assert policy().next_action(root, data, "post-hoc")["action"] == "finish"
 
 
-@pytest.mark.parametrize("author_note", ["", "保留收摊后的对话。"])
-def test_reader_repair_plan_is_durable_and_restarts_polish_with_feedback(tmp_path, author_note):
+def test_cached_automatic_repair_action_does_not_start_assistant_or_writer(tmp_path):
     root, manager, service = setup(tmp_path)
-    class Jobs:
-        entries = []
-        support_loader = staticmethod(lambda **kwargs: SimpleNamespace(preflight=lambda *args: {"ready": True}))
-        def history(self, root): return self.entries
-        def _write(self, root, entries): self.entries = entries
-        def start(self, root, request_id, payload):
-            self.entries.append({"id": request_id, "status": "running", "purpose": "reader_repair",
-                                 "repair_source": payload["_repair_context"], "reply": "", "chapter": "0001"})
-            return self.entries[-1]
-    service.assistant_jobs = Jobs()
-    data = state(root); data.update(stageId="reader-sim", readerRepairCount=0, autoRepairLimit=2)
-    if author_note:
-        (root / "author-note.md").write_text(author_note, encoding="utf-8")
-        data["values"]["author_feedback_file"] = "author-note.md"
-    task = manager.create_task("custom-reader-sim", parameter_values={"chapter_number": "0001"}, workspace_override=str(root))
-    task["status"] = "completed"; manager.save(task)
-    write(manager.directory / "custom-reader-sim/.extension.json", {"owner": "xs2-novel-flywheel", "local_id": "reader-sim"})
-    data["refs"] = {"reader-sim": {"workflow_id": "custom-reader-sim", "task_id": task["task_id"]}}
-    write(root / ".novel-project.json", data)
-    folder = root / "story/0001"; folder.mkdir(parents=True); (folder / "chapter.md").write_text("body")
-    write(folder / "reader_report.json", {"verdict": "revise", "chapter_number": "0001", "summary": "needs work"})
-    asyncio.run(service.tick(root))
-    request_id = state(root)["autoRepairPlanId"]
-    asyncio.run(service.tick(root))
-    assert service.assistant_jobs.entries[0]["id"] == request_id
-    service.assistant_jobs.entries[0].update(status="completed", reply="Revise the scene.")
+    data = state(root) | {"stageId": "reader-sim", "autoRepairPlanId": "previous-plan"}
+    data["values"]["author_feedback_file"] = "author-note.md"
+    original = "保留收摊后的对话。"
+    (root / "author-note.md").write_text(original, encoding="utf-8")
+    service._apply_action(root, data, {"action": "repair"})
     asyncio.run(service.tick(root))
     updated = state(root)
-    assert updated["stageId"] == "polish"
-    assert updated["readerRepairCount"] == 1
-    assert "reader-sim" not in updated["refs"]
-    feedback = root / updated["values"]["author_feedback_file"]
-    assert feedback.read_text(encoding="utf-8").startswith("# 第0001章 · 根据读者评估自动采用的返修方案\n")
-    context = policy().execution_guard().load(
-        "reader_context_test", Path(policy().__file__).resolve().parents[1] / "reader_review/reader_review.py"
-    ).revision_context(root)
-    assert context["author_feedback"] == author_note
-    assert "Revise the scene." in context["automatic_revision_advice"]
-    asyncio.run(service.tick(root))
-    assert manager.created[-1]["workflow_id"] == "custom-polish"
-    frozen = root / manager.created[-1]["parameter_values"]["author_feedback_file"]
-    assert frozen != feedback and frozen.read_bytes() == feedback.read_bytes()
+    assert updated["stageId"] == "post-hoc" and not updated["autoArmed"]
+    assert not updated.get("autoRepairPlanId")
+    assert manager.created == [] and manager.started == []
+    assert (root / updated["values"]["author_feedback_file"]).read_text(encoding="utf-8") == original
 
 
 def test_two_ticks_cannot_create_duplicate_tasks_and_missing_inputs_pause(tmp_path):

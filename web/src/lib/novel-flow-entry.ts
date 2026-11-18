@@ -10,6 +10,7 @@ type EntryProject = {
 };
 
 export function novelEntryStage(project: EntryProject, stages: Array<{id: string}>) {
+  if (project.stageId === 'reader-sim' && stages.some(stage => stage.id === 'post-hoc')) return 'post-hoc';
   const emptyDraft = !Object.keys(project.refs).length && !project.completed.length &&
     (!project.persisted || project.stageId === 'build' || (!project.stageId && project.index <= 1));
   if (emptyDraft && !project.directionConfirmed) return 'novel-advisor';

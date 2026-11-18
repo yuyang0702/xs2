@@ -8,7 +8,7 @@ import { box, button, field, muted, primary, Problem, prose } from "./character-
 
 type Props = Scope & {
   currentChapter?: string; knownChapters?: string[]; progressWorkflowId?: string;
-  onHome?: () => void; onWrite?: (chapter: string) => void; onReview?: (chapter: string) => void;
+  onHome?: () => void; onWrite?: (chapter: string) => void; onReadChapter?: (chapter: string) => void;
 };
 function chapterNumber(value: string) {
   return /^[0-9]{1,4}$/.test(value) && Number(value) > 0 ? value.padStart(4, "0") : "";
@@ -18,7 +18,7 @@ export default function CharacterCenterPanel(props: Props) {
   return <CharacterCenter key={JSON.stringify([props.workflowId, props.workspace])} {...props} />;
 }
 
-function CharacterCenter({ workspace, workflowId, progressWorkflowId, currentChapter = "", knownChapters = [], onHome, onWrite, onReview }: Props) {
+function CharacterCenter({ workspace, workflowId, progressWorkflowId, currentChapter = "", knownChapters = [], onHome, onWrite, onReadChapter }: Props) {
   const api = useMemo(() => characterApi({ workspace, workflowId }), [workspace, workflowId]);
   const [chapter, setChapter] = useState("");
   const [chapterInput, setChapterInput] = useState("");
@@ -95,7 +95,7 @@ function CharacterCenter({ workspace, workflowId, progressWorkflowId, currentCha
             ? " · 已确认" : inventory?.stale_chapters.includes(value) ? " · 证据失效" : ""}</option>)}
         </select>}
         {onWrite && <button className={button} onClick={() => onWrite(actionChapter)}>进入创作流程</button>}
-        {onReview && <button className={button} onClick={() => onReview(actionChapter)}>查看读者评估与返修</button>}
+        {onReadChapter && <button className={button} onClick={() => onReadChapter(actionChapter)}>查看章节正文</button>}
       </div>
       <Problem message={chapterError} />
       <p className={muted} role="status">{shownChapter ? "查看第 " + Number(shownChapter) + " 章" : "尚无已确认章节，可输入规划中的章节。"}</p>

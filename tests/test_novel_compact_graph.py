@@ -32,7 +32,7 @@ MVP_GUARD_AGENTS = ["agent_guard_facts_repair", "agent_guard_facts_audit",
                     "agent_guard_expression_repair", "agent_guard_expression_audit"]
 
 
-def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None], reject_at=""):
+def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None], reject_at="", *, clean_guard=False):
     data = json.loads((RESOURCE_ROOT / workflow / "definition.json").read_text(encoding="utf-8"))
     definition = WorkflowDef.from_dict(data)
     original_types = {node.id: node.node_type for node in definition.nodes}
@@ -50,6 +50,9 @@ def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None], reject
             outputs = {"character_names": '["阿禾", "小岚"]'} if ctx.node_def.id == "script_extract" else {}
             if ctx.node_def.id == "script_guard_prepare":
                 outputs["guard_enabled"] = "yes"
+            if clean_guard and ctx.node_def.id in {"script_guard_facts_precheck", "script_guard_expression_precheck"}:
+                phase = ctx.node_def.id.split("_")[2]
+                outputs[f"guard_{phase}_needs_repair"] = "no"
             return NodeResult(status="completed", summary=ctx.node_def.id, outputs=outputs)
 
     monkeypatch.setitem(registry._plugins, Probe.node_type, Probe)
@@ -89,6 +92,22 @@ def _run_graph(monkeypatch, workflow: str, values: dict[str, str | None], reject
     return task, calls, [node for node in calls if original_types[node] == "agent"]
 
 
+def _assert_clean_guard_before_publication(task, calls, source):
+    nodes = {node["id"]: node for node in task.snapshot_definition["nodes"]}
+    if "script_guard_facts_precheck" not in nodes:
+        facts_repair, facts_audit, expression_repair, expression_audit = MVP_GUARD_AGENTS
+        guard_path = [facts_repair, facts_audit, "script_guard_facts_commit",
+                      expression_repair, expression_audit, "script_guard_expression_commit"]
+    else:
+        guard_path = ["agent_guard_facts_inspect", "script_guard_facts_precheck", "script_guard_facts_accept"]
+        if "--combined-precheck" not in nodes["script_guard_prepare"]["node_params"]["script_argv"]:
+            guard_path.append("agent_guard_expression_inspect")
+        guard_path.extend(["script_guard_expression_precheck", "script_guard_expression_accept"])
+    ordered = [source, "script_guard_prepare", *guard_path, "script_guard_finish", "script_si_post"]
+    assert [node for node in calls if node in ordered] == ordered
+    return [node for node in guard_path if node.startswith("agent_")]
+
+
 @pytest.mark.parametrize("workflow,compact_agent,compact_script,standard_agents", [
     ("build", "agent_short_world", "script_short_world", WORLD_AGENTS),
     ("character", "agent_short_character", "script_short_character", CHARACTER_AGENTS),
@@ -120,14 +139,14 @@ def test_legacy_full_and_long_preparation_keep_original_path(monkeypatch, workfl
 def test_compact_single_chapter_keeps_common_context_writer_and_quality_tail(monkeypatch):
     task, calls, agents = _run_graph(monkeypatch, "mvp", {
         "preparation_mode": "compact", "conflict_plan_mode": "short_full", "chapter_number": "0001", "writer_type": "single",
-    })
-    assert agents == [MVP_SHARED_PLANNER, "agent_sw", *MVP_GUARD_AGENTS]
-    assert calls[:4] == ["script_story_context", "script_sync_down", "script_smart_context", "script_short_context"]
+    }, clean_guard=True)
+    guard_agents = _assert_clean_guard_before_publication(task, calls, "agent_sw")
+    assert agents == [MVP_SHARED_PLANNER, "agent_sw", *guard_agents]
+    context_steps = ["script_story_context", "script_sync_down", "script_smart_context", "script_short_context"]
+    assert [node for node in calls if node in context_steps] == context_steps
     assert calls.index("script_short_context") < calls.index("agent_sw") < calls.index("script_si_post") < calls.index("script_check_originality")
     assert calls.count("agent_sw") == calls.count("script_si_post") == calls.count("script_check_originality") == 1
     assert calls.index(MVP_SHARED_PLANNER) < calls.index("agent_sw")
-    assert calls.index("agent_sw") < calls.index("script_guard_prepare") < calls.index("script_guard_facts_commit")
-    assert calls.index("script_guard_facts_commit") < calls.index("script_guard_expression_commit") < calls.index("script_si_post")
     assert all(task.node_states[node].status == "skipped" for node in MVP_PREP_AGENTS | MVP_MULTI_WRITERS)
 
 
@@ -158,16 +177,16 @@ def test_mvp_defaults_later_chapters_and_multi_writer_preserve_standard_path(mon
 def test_compact_multi_writer_validates_assembly_before_publication(monkeypatch):
     task, calls, agents = _run_graph(monkeypatch, "mvp", {
         "preparation_mode": "compact", "conflict_plan_mode": "short_full", "chapter_number": "0001", "writer_type": "muti",
-    })
-    assert set(agents) == MVP_MULTI_AGENTS | set(MVP_GUARD_AGENTS)
+    }, clean_guard=True)
+    guard_agents = _assert_clean_guard_before_publication(task, calls, "script_multi_assemble")
+    assert len(agents) == len(MVP_MULTI_AGENTS) + len(guard_agents)
+    assert set(agents) == MVP_MULTI_AGENTS | set(guard_agents)
     assert all(task.node_states[node].status == "skipped" for node in MVP_PREP_AGENTS | {"agent_sw"})
     assert calls.index("script_short_context") < calls.index("script_multi_prepare") < calls.index("agent_nw")
     assert calls.index("agent_nw") < calls.index("script_multi_plan")
     assembly = calls.index("script_multi_assemble")
     assert all(calls.index(writer) < assembly for writer in MVP_MULTI_AGENTS)
     assert assembly < calls.index("script_si_post") < calls.index("script_render_si")
-    assert assembly < calls.index("script_guard_prepare") < calls.index("script_guard_facts_commit")
-    assert calls.index("script_guard_facts_commit") < calls.index("script_guard_expression_commit") < calls.index("script_si_post")
 
 
 @pytest.mark.parametrize("gate", ["script_multi_scene_2", "script_multi_assemble"])

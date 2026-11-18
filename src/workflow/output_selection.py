@@ -86,7 +86,15 @@ def select_agent_output(record: list[dict], params: dict) -> tuple[str, str]:
             try:
                 Draft202012Validator.check_schema(schema)
                 Draft202012Validator(schema).validate(data)
-            except (SchemaError, ValidationError) as exc:
+            except ValidationError as exc:
+                if isinstance(exc.instance, list) and exc.validator in {"minItems", "maxItems"}:
+                    detail = f"{len(exc.instance)} items, expected {exc.validator}={exc.validator_value}"
+                elif exc.validator == "contains":
+                    detail = "no item satisfies contains"
+                else:
+                    detail = exc.message
+                raise ValueError(f"JSON schema validation failed at {exc.json_path}: {detail}") from exc
+            except SchemaError as exc:
                 raise ValueError(f"JSON schema validation failed: {exc.message}") from exc
         return json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False), ""
     except (ValueError, TypeError) as exc:

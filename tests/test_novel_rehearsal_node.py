@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.workflow.definition import WorkflowDef, WorkflowNode
+from src.workflow.definition import WorkflowDef, WorkflowNode, WorkflowVariable, resolve_placeholders
 from src.workflow.nodes import NodeContext, registry
 from src.workflow.runtime_models import NodeExecutionState
 from src.workflow.task_overrides import MODEL_PARAMS_OVERRIDE_KEY
@@ -28,7 +28,8 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
                         node_params={'writer_node': writer_id, 'slot': slot, 'compact_short_writer': configured})
     writer = WorkflowNode(id=writer_id, agent_type='writer', model_override='book:writer',
                           node_params={MODEL_PARAMS_OVERRIDE_KEY: {'temperature': 0.42}})
-    workflow = WorkflowDef(workflow_id='test', nodes=[node, writer])
+    variables = [WorkflowVariable(key='single_writer_compact_context_file', type='file')]
+    workflow = WorkflowDef(workflow_id='test', nodes=[node, writer], variables=variables)
     calls = []
 
     class Model:
@@ -53,7 +54,17 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
         assert await call('actor-1', 'own role', 'own input', lambda raw: raw) == '{"speech":"真这样？"}'
         return 'cache/multi/test-task/rehearsal.md', 1
 
-    monkeypatch.setattr(novel_plugin, 'script_service', lambda _: SimpleNamespace(prepare_rehearsal=prepare))
+    def writer_context(root, directory, source, scene_brief):
+        assert compact
+        assert (root, directory, source) == (tmp_path, 'cache/multi/test-task', short_context)
+        assert scene_brief == 'cache/multi/test-task/rehearsal.md'
+        path = root / directory / 'r-agent_sw-context.md'
+        path.parent.mkdir(parents=True)
+        path.write_text('投影后的写作用资料。', encoding='utf-8')
+        return path.relative_to(root).as_posix(), 'cache/multi/test-task/r-agent_sw-writer-scenes.md'
+
+    service = SimpleNamespace(prepare_rehearsal=prepare, prepare_writer_context=writer_context)
+    monkeypatch.setattr(novel_plugin, 'script_service', lambda _: service)
     monkeypatch.setattr(definition, 'get_agent_definition', lambda _: SimpleNamespace(model=None, model_params={}))
     monkeypatch.setattr(llm_client, 'create_llm', create)
     runner = registry.get('novel_rehearsal')
@@ -66,7 +77,15 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
                           'short_context_file': short_context, 'single_writer_plan': '' if short_definition else None,
                           'pp_learning_context': '{{learning_context}}', 'learning_context': 'adopted.md'})))
     assert result.status == 'completed'
-    assert result.outputs == {f'rehearsal_{writer_id}': 'cache/multi/test-task/rehearsal.md'}
+    outputs = {f'rehearsal_{writer_id}': 'cache/multi/test-task/rehearsal.md'}
+    if compact:
+        outputs['single_writer_compact_context_file'] = 'cache/multi/test-task/r-agent_sw-context.md'
+        outputs['single_writer_context'] = '{{single_writer_compact_context_file}}'
+        outputs[f'rehearsal_{writer_id}'] = 'cache/multi/test-task/r-agent_sw-writer-scenes.md'
+    assert result.outputs == outputs
+    if compact:
+        rendered = asyncio.run(resolve_placeholders('{{single_writer_context}}', result.outputs, variables, str(tmp_path)))
+        assert rendered == '投影后的写作用资料。'
     assert calls == [('own role', 'own input')]
     assert result.token_usage['book:writer']['total_tokens'] == 16
     assert len(result.token_usage_calls) == 1
