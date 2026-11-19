@@ -51,8 +51,12 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
             tmp_path, 'test-task', writer_id, '0001', 'cache/multi/test-task', slot, 'adopted.md')
         assert options == ({'compact': True} if compact else {})
         assert model_identity
-        assert await call('actor-1', 'own role', 'own input', lambda raw: raw) == '{"speech":"真这样？"}'
-        return 'cache/multi/test-task/rehearsal.md', 1
+        def parse(raw):
+            if slot and len(calls) == 1:
+                raise ValueError('speech 超出 240 字')
+            return raw
+        assert await call('actor-1', 'own role', 'own input', parse) == '{"speech":"真这样？"}'
+        return 'cache/multi/test-task/rehearsal.md', 0 if slot else 1
 
     def writer_context(root, directory, source, scene_brief):
         assert compact
@@ -77,6 +81,8 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
                           'short_context_file': short_context, 'single_writer_plan': '' if short_definition else None,
                           'pp_learning_context': '{{learning_context}}', 'learning_context': 'adopted.md'})))
     assert result.status == 'completed'
+    if slot:
+        assert '未采用试演' in result.summary and '分场' in result.summary
     outputs = {f'rehearsal_{writer_id}': 'cache/multi/test-task/rehearsal.md'}
     if compact:
         outputs['single_writer_compact_context_file'] = 'cache/multi/test-task/r-agent_sw-context.md'
@@ -86,6 +92,9 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
     if compact:
         rendered = asyncio.run(resolve_placeholders('{{single_writer_context}}', result.outputs, variables, str(tmp_path)))
         assert rendered == '投影后的写作用资料。'
-    assert calls == [('own role', 'own input')]
-    assert result.token_usage['book:writer']['total_tokens'] == 16
-    assert len(result.token_usage_calls) == 1
+    assert calls[0] == ('own role', 'own input')
+    if slot:
+        assert 'speech 超出 240 字' in calls[1][0] and calls[1][1] == 'own input'
+    attempts = 2 if slot else 1
+    assert len(calls) == len(result.token_usage_calls) == attempts
+    assert result.token_usage['book:writer']['total_tokens'] == 16 * attempts

@@ -105,10 +105,10 @@ class NovelRehearsalNode(BaseNodePlugin):
                                           if isinstance(part, dict) and part.get("type") in {"text", "output_text"})
                     try:
                         return parse(content)
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError) as error:
                         if attempt:
-                            raise ValueError(f"分角色试演的 {step} 两次返回无效结构。") from None
-                        messages[0] = SystemMessage(content=system + "\n按要求返回完整纯 JSON，保留所有必填字段。")
+                            raise ValueError(f"分角色试演的 {step} 两次返回无效结构：{error}") from None
+                        messages[0] = SystemMessage(content=f"{system}\n上一份回复未通过校验：{error}。请修正后返回完整 JSON。")
                 finally:
                     close = getattr(client, "aclose", None)
                     if callable(close):
@@ -143,7 +143,7 @@ class NovelRehearsalNode(BaseNodePlugin):
                 outputs[f"rehearsal_{writer_id}"] = scene_path
             result = NodeResult(
                 status="completed",
-                summary=f"声线审核通过，已交接 {count} 场人物试演。" if count else "当前场景没有需要试演、且档案可匹配的出场人物。",
+                summary=f"声线审核通过，已交接 {count} 场人物试演。" if count else "本场未采用试演素材，写手按已确认的分场继续。",
                 outputs=outputs,
             )
         except ValueError as error:
