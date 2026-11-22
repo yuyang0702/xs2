@@ -380,7 +380,7 @@ class ModelManager:
     # 允许通过 update_provider 修改的字段白名单
     _PROVIDER_UPDATE_KEYS = frozenset({
         "name", "display_name", "base_url", "api_key", "models", "models_config",
-        "maxContextTokens", "provider_type",
+        "maxContextTokens", "provider_type", "request_group",
         "hyperparameter_values", "managed_by", "error_messages",
     })
 

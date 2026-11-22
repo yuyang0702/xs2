@@ -16,13 +16,13 @@ from src.core.llm_client import (
     create_llm,
 )
 from src.core.model_manager import get_model_manager
+from src.core.provider_queue import GroupPaused, ProbeBusy
 
 
 logger = logging.getLogger(__name__)
 
 PROBE_PROMPT = "Reply with exactly OK."
 PROBE_MAX_OUTPUT_TOKENS = 32
-PROBE_TIMEOUT_SECONDS = 30.0
 
 _AUTH_ERRORS = (
     openai.AuthenticationError,
@@ -193,6 +193,10 @@ def _extract_usage(output: Any) -> dict[str, int] | None:
 
 
 def _sanitized_provider_error(error: Exception) -> ModelProbeError:
+    if isinstance(error, GroupPaused):
+        return ModelProbeError("provider_group_paused", str(error), 409)
+    if isinstance(error, ProbeBusy):
+        return ModelProbeError("provider_group_busy", str(error), 409)
     if isinstance(error, _AUTH_ERRORS):
         return ModelProbeError(
             "provider_auth_failed",
@@ -239,7 +243,7 @@ def _sanitized_provider_error(error: Exception) -> ModelProbeError:
 async def probe_configured_model(
     model: str,
     *,
-    timeout_seconds: float = PROBE_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Run exactly one minimal inference against a configured model."""
     model = _validate_model_reference(model)
@@ -247,11 +251,10 @@ async def probe_configured_model(
         model_params = _probe_model_params(model)
         llm = create_llm(
             model_override=model,
-            streaming=False,
+            streaming=True,
             model_params=model_params,
             provider_retries_enabled=False,
             max_tokens=256 if model_params.get("thinking_enabled") else PROBE_MAX_OUTPUT_TOKENS,
-            timeout=timeout_seconds,
         )
     except ModelCredentialNotConfiguredError as error:
         raise ModelProbeError(
@@ -273,6 +276,8 @@ async def probe_configured_model(
         ) from error
 
     started_at = perf_counter()
+    if queue := getattr(llm, "provider_queue", None):
+        queue.probe_only_if_idle = True
     try:
         output = await asyncio.wait_for(
             llm.ainvoke(PROBE_PROMPT),

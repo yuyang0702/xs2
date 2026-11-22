@@ -145,6 +145,8 @@ async def run_resumable(node, ctx, view_path, view, identity):
                     raise ValueError("本地校读仍有明确命中：" + "、".join(hits))
         except (KeyError, ValueError, TypeError) as exc:
             failures[key] = str(exc)
+            if "供应商分组已暂停：" in str(exc):
+                break
             consecutive_failures += 1
             if consecutive_failures >= 3:
                 break

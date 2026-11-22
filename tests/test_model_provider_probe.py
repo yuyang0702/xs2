@@ -95,14 +95,13 @@ def test_probe_runs_one_minimal_inference_without_retries(monkeypatch) -> None:
     assert llm.prompts == [model_probe.PROBE_PROMPT]
     assert captured == {
         "model_override": "provider-a:model-a",
-        "streaming": False,
+        "streaming": True,
         "model_params": {
             "thinking_enabled": False,
             "reasoning_effort": "low",
         },
         "provider_retries_enabled": False,
         "max_tokens": model_probe.PROBE_MAX_OUTPUT_TOKENS,
-        "timeout": model_probe.PROBE_TIMEOUT_SECONDS,
     }
     assert result["ok"] is True
     assert result["model"] == "provider-a:model-a"
@@ -296,9 +295,10 @@ def test_create_llm_disables_sdk_and_core_retries(
     manager = ModelManager(str(config_path))
     captured = {}
 
-    class FakeChatOpenAI:
-        def __init__(self, **kwargs) -> None:
-            captured.update(kwargs)
+    real_client = llm_client_module.ChatOpenAI
+    def capture_client(**kwargs):
+        captured.update(kwargs)
+        return real_client(**kwargs)
 
     def unexpected_retry_wrapper(*_args, **_kwargs):
         raise AssertionError("Core retry wrapper must not be installed")
@@ -307,7 +307,7 @@ def test_create_llm_disables_sdk_and_core_retries(
         "src.core.model_manager.get_model_manager",
         lambda: manager,
     )
-    monkeypatch.setattr(llm_client_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(llm_client_module, "ChatOpenAI", capture_client)
     monkeypatch.setattr(
         llm_client_module,
         "_wrap_llm_with_retry",

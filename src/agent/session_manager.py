@@ -805,6 +805,7 @@ class SessionManager(SessionLifecycleMixin):
         if request_fingerprint:
             create_llm_kwargs["request_fingerprint"] = request_fingerprint
         sub_llm = create_llm(**create_llm_kwargs)
+        session.provider_queue = getattr(sub_llm, "provider_queue", None)
         session.model_id = final_model  # 记录模型标识到 session
         session.model_params = dict(agent_params or {})
         session.setup_graph(llm=sub_llm, tools=sub_tools)

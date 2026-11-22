@@ -499,7 +499,7 @@ def create_llm(
         streaming: 是否支持流式输出，默认 True
         model_params: 模型参数字典，包含 thinking_enabled / reasoning_effort / temperature / top_p
                      未设置时从 models_config.json 的 default_params 继承
-        provider_retries_enabled: 是否启用 SDK 与 Core Provider 传输重试；探针等一次性调用应关闭
+        provider_retries_enabled: 是否允许在供应商明确的 429 冷却结束后重新排队；探针只请求一次
         request_fingerprint: Workflow 节点 LLM 子会话的不透明 SHA-256 路由身份；
             未提供时不发送 X-DeterminFlow-Request-Fingerprint
         **kwargs: 传递给 Provider 客户端的额外参数
@@ -518,10 +518,6 @@ def create_llm(
     provider_id, model_name, api_key, base_url, provider_config = _resolve_provider_config(
         resolved, model_manager
     )
-    if not provider_retries_enabled:
-        # LangChain clients have their own SDK retry policy in addition to the
-        # Core wrapper below. One-shot callers must disable both layers.
-        kwargs["max_retries"] = 0
     try:
         api_format = model_manager.get_provider_api_format(provider_id, model_name)
         client_base_url = model_manager.get_provider_client_base_url(
@@ -537,6 +533,15 @@ def create_llm(
         model_params,
         kwargs,
     )
+    # Admission and 429 scheduling belong to the shared group, including probes.
+    # The SDK read timeout must not preempt the body's inactivity watchdog.
+    from .provider_queue import IDLE_SECONDS, ProviderQueue
+    from .queued_model import install_queue
+    import httpx
+    kwargs["max_retries"] = 0
+    kwargs["timeout"] = (IDLE_SECONDS + 30 if api_format == "anthropic"
+                         else httpx.Timeout(IDLE_SECONDS + 30, connect=30))
+    kwargs.pop("stream_chunk_timeout", None)
     _apply_request_fingerprint_headers(kwargs, request_fingerprint)
     # Carry the resolved route through LangChain start/end events. Session.model_id
     # may still contain a bare alias or None when the factory selected a default.
@@ -579,9 +584,8 @@ def create_llm(
             **kwargs,
         )
 
-    if provider_retries_enabled:
-        retry_config = model_manager.get_retry_config()
-        _wrap_llm_with_retry(llm, retry_config)
+    install_queue(llm, ProviderQueue.for_provider(provider_config), resolved,
+                  retry_after_cooldown=provider_retries_enabled)
 
     logger.info(
         f"LLM 实例已创建: model={model_name}, temperature={kwargs.get('temperature', 'default')}, "

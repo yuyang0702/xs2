@@ -1,3 +1,4 @@
+import ProviderQueues from "@/components/ProviderQueues";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 
@@ -113,6 +114,7 @@ export function ModelsCategory({ section }: { section: SettingsSection }) {
       onRetry={() => void load()}
     >
       <div className="flex flex-col gap-4">
+        <ProviderQueues />
         {Object.values(drafts).map((provider) => (
           <ModelProviderCard
             key={provider.id}

@@ -2378,6 +2378,7 @@ async def reload_agent_definitions(request: Request):
 # ============ 模型供应商 API ============
 
 class UpdateModelProviderRequest(BaseModel):
+    request_group: str | None = Field(None, max_length=128)
     name: str | None = None
     provider_type: str | None = None
     base_url: str | None = None
@@ -2394,6 +2395,7 @@ class UpdateModelProviderRequest(BaseModel):
 
 
 class AddModelProviderRequest(BaseModel):
+    request_group: str | None = Field(None, max_length=128)
     provider_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
     provider_type: str | None = None
     name: str
@@ -2534,6 +2536,7 @@ async def add_model_provider(body: AddModelProviderRequest, request: Request):
 
     try:
         provider_config = {
+            **({"request_group": body.request_group} if body.request_group else {}),
             "provider_type": body.provider_type,
             "name": body.name,
             "base_url": body.base_url,
@@ -2636,6 +2639,37 @@ async def probe_provider_model(body: ProbeProviderModelRequest):
             status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
+
+
+@router.get("/model-providers/queues/status")
+def provider_queue_status():
+    from src.core.model_manager import get_model_manager
+    from src.core.provider_queue import ProviderQueue
+    manager = get_model_manager()
+    groups = {}
+    seen = set()
+    for pid in manager.get_all_providers():
+        provider = manager.get_provider(pid)
+        if provider and provider.get("api_key") and provider.get("base_url"):
+            queue = ProviderQueue.for_provider(provider)
+            if queue.path not in seen and queue.path.exists():
+                seen.add(queue.path)
+                groups[pid] = {**queue.status(), "provider_name": provider.get("name") or pid}
+    return {"groups": groups}
+
+
+@router.post("/model-providers/{provider_id}/queue/resume")
+def resume_provider_queue(provider_id: str):
+    from src.core.model_manager import get_model_manager
+    from src.core.provider_queue import ProviderQueue
+    provider = get_model_manager().get_provider(provider_id)
+    if not provider or not provider.get("api_key"):
+        raise HTTPException(404, detail="供应商未配置")
+    try:
+        ProviderQueue.for_provider(provider).resume()
+    except ValueError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    return {"success": True}
 
 
 @router.delete("/model-providers/{provider_id}")

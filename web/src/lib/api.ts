@@ -1066,6 +1066,25 @@ export async function deleteToolGroup(groupId: string) {
 
 // ============ 模型供应商 API ============
 
+export interface ProviderQueueStatus {
+  provider_name: string;
+  state: "ready" | "active" | "cooldown" | "paused";
+  reason: string;
+  until: number;
+  waiting: number;
+  model: string;
+  first_word_overdue: boolean;
+  first_word: number;
+}
+
+export function getProviderQueues() {
+  return request<{ groups: Record<string, ProviderQueueStatus> }>("/model-providers/queues/status");
+}
+
+export function resumeProviderQueue(id: string) {
+  return request("/model-providers/" + encodeURIComponent(id) + "/queue/resume", { method: "POST" });
+}
+
 export async function getModelProviders() {
   return request<{
     providers: Record<string, Omit<import("../types").ModelProvider, "id">>;

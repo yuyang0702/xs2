@@ -47,6 +47,7 @@ export function providerUpdatePayload(provider: ModelProvider): Partial<ModelPro
     provider_type: provider.provider_type,
     name: provider.name,
     base_url: provider.base_url,
+    request_group: provider.request_group,
     api_key: provider.api_key,
     models: provider.models,
     maxContextTokens: provider.maxContextTokens,

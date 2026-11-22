@@ -128,6 +128,9 @@ def present_session_error(
     provider_config: dict[str, Any] | None = None,
 ) -> PresentedError:
     """Return a safe error for persistence and user-facing session surfaces."""
+    from .provider_queue import GroupPaused
+    if isinstance(error, GroupPaused):
+        return PresentedError(code="provider_group_paused", message=str(error))
     provider_error_code = classify_provider_error_code(error)
     code = classify_provider_error(error)
     if code is None:

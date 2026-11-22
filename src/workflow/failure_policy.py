@@ -54,6 +54,7 @@ def can_auto_retry(
     """只有失败节点且当前失败链仍有预算时才允许自动重试。"""
     return (
         normalize_node_status(state.status) == "failed"
+        and "供应商分组已暂停：" not in (state.error or "")
         and automatic_retries_remaining(node, state) > 0
     )
 
@@ -65,6 +66,7 @@ def should_auto_skip(
     """自动重试耗尽后，按节点策略决定是否跳过。"""
     return (
         normalize_node_status(state.status) == "failed"
+        and "供应商分组已暂停：" not in (state.error or "")
         and bool(getattr(node, "fail_auto_skip", False))
         and not can_auto_retry(node, state)
     )

@@ -541,6 +541,10 @@ class AgentNode(BaseNodePlugin):
             wait_start = time.time()
             deadline = time.monotonic() + timeout
             while not completion_event.is_set():
+                session = getattr(sm, "sessions", {}).get(session_id)
+                if getattr(getattr(session, "provider_queue", None), "local_requests", 0):
+                    # Queueing and a progressing generation have their own watchdog.
+                    deadline = time.monotonic() + timeout
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise asyncio.TimeoutError

@@ -1,3 +1,4 @@
+import ProviderQueues from "../components/ProviderQueues";
 import NovelResourceGate from "../components/NovelResourceGate";
 import { isMissingNovelTask, readArchivedNovelStage } from "../lib/novel-archived-stage";
 import NovelZhuqueOptions from "../components/NovelZhuqueOptions";
@@ -1360,6 +1361,7 @@ function FlowView({ active = true, onServerState, chapterOpening = false, nextCh
       <section className={`${cardClass} min-w-0 p-6`}>
         <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs text-primary">第 {stageIndex + 1} 步 / 共 {stages.length} 步</p><h2 className="mt-2 text-2xl font-semibold">{advisorMode ? "AI 小说顾问：先聊想法，再确定写法" : currentStage.title}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{advisorMode ? "在正式创作前，AI 帮你判断这本小说写什么、主要看点是什么、适合怎么写。有一句想法就能开始，还没想好也可以一起讨论。" : currentStage.description}</p></div><div className="flex items-center gap-2 text-xs text-muted-foreground">{available ? <><span className="h-2 w-2 rounded-full bg-emerald-400" />工作流已连接</> : <><span className="h-2 w-2 rounded-full bg-amber-400" />等待插件工作流</>}</div></div>
         {available && !variablesReady && <p role="status" className="text-sm text-muted-foreground">{currentVariables?.error || "正在读取当前步骤参数…"}</p>}
+        <ProviderQueues />
         {available && currentStage.id !== "export" && <NovelStepModels workflowId={workflowId(currentStage.id)} task={task} disabled={busy} onPendingChange={setModelPending} onSaved={() => { setActionFeedback("模型设置已同步到工作流，后续新任务会读取新配置。"); }} />}
         {advisorMode ? <><AssistantPanel advisorMode workflowBusy={busy} hasStoryFacts={hasStoryFacts} key={workspace} workspace={workspace} project={project} setProject={setProject} currentStage={currentStage} nextStage={stages[stageIndex + 1]} candidateSet={candidateSet} impactInventory={outlineInventory} onAdoptAdvisor={entry => {const outcome=adoptNovelAdvisor(project, entry, FALLBACK_DEFAULTS, stages, hasStoryFacts); if(outcome.success) setProject(outcome.project); return outcome;}} onManualSelect={onOpenReference ? () => {console.log('[FlowView-advisorMode] onManualSelect 被调用，准备跳转'); onOpenReference();} : undefined} setPendingQuickAdoptJump={setPendingQuickAdoptJump} />
           <details className="mt-6 rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">已有要求 / 手动设置</summary><p className="mt-3 text-xs leading-6 text-muted-foreground">有明确要求时可以填写；没有要求就先与 AI 讨论。你手动确定的内容会持续保留。</p>{manualControls}</details>

@@ -52,6 +52,7 @@ export interface SessionFailedTurn {
 }
 
 export interface ModelProvider {
+  request_group?: string;
   id: string;
   name: string;
   provider_type: string;

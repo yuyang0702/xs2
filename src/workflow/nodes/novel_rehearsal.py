@@ -1,9 +1,9 @@
 """Execute the enabled novel plugin's role rehearsal before a body writer."""
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
+from src.core.provider_queue import GroupPaused
 
 from src.workflow.definition import resolve_placeholders
 from src.workflow.model_utils import _now_iso
@@ -90,11 +90,11 @@ class NovelRehearsalNode(BaseNodePlugin):
             for attempt in range(2):
                 client = llm_client.create_llm(
                     model_override=model_id, model_params=request_params, streaming=True,
-                    timeout=60, provider_retries_enabled=False, request_fingerprint=fingerprint,
+                    provider_retries_enabled=False, request_fingerprint=fingerprint,
                 )
                 started = _now_iso()
                 try:
-                    response = await asyncio.wait_for(client.ainvoke(messages), timeout=65)
+                    response = await client.ainvoke(messages)
                     metadata = getattr(client, "metadata", None) or {}
                     await usage._extract_and_broadcast_token_usage(
                         response, None, call_timestamp=started,
@@ -125,11 +125,10 @@ class NovelRehearsalNode(BaseNodePlugin):
                 and chapter == "0001" and bool(values.get("short_context_file")) and values.get("single_writer_plan") == ""
             )
             options = {"compact": True} if compact_short else {}
-            async with asyncio.timeout(360):
-                output, count = await service.prepare_rehearsal(
-                    ctx.shared_ws, ctx.task_id, writer_id, chapter,
-                    values.get("multi_dir", ""), slot, style, call, model_identity=identity, **options,
-                )
+            output, count = await service.prepare_rehearsal(
+                ctx.shared_ws, ctx.task_id, writer_id, chapter,
+                values.get("multi_dir", ""), slot, style, call, model_identity=identity, **options,
+            )
             outputs = {f"rehearsal_{writer_id}": output}
             compact_context = "single_writer_compact_context_file"
             project_context = getattr(service, "prepare_writer_context", None)
@@ -147,7 +146,7 @@ class NovelRehearsalNode(BaseNodePlugin):
                 summary=f"声线审核通过，已交接 {count} 场人物试演。" if count else "本场未采用试演素材，写手按已确认的分场继续。",
                 outputs=outputs,
             )
-        except ValueError as error:
+        except (ValueError, GroupPaused) as error:
             result = NodeResult(status="failed", error=str(error))
         except Exception as error:
             logger.warning("角色试演失败 node=%s error=%s", ctx.node_def.id, type(error).__name__)

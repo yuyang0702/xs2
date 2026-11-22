@@ -211,6 +211,11 @@ export default function ModelProviderCard({
             </button>
             {apiAddressExpanded ? (
               <div className="border-t border-border p-3">
+                <label className="mb-3 block text-sm">共享请求分组（选填）
+                  <Input value={provider.request_group || ""} maxLength={128}
+                    placeholder="多个供应商配置共用额度时填写同一个名称"
+                    onChange={(event) => onChange({ ...provider, request_group: event.target.value })} />
+                </label>
                 <Input
                   value={provider.base_url}
                   onChange={(event) => onChange({ ...provider, base_url: event.target.value })}
