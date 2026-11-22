@@ -1,5 +1,7 @@
 import asyncio
 import json
+import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 
 from src.workflow.definition import WorkflowNode
@@ -8,7 +10,16 @@ from src.workflow.nodes.base import NodeContext, NodeResult
 from src.workflow.nodes.rewrite_progress import RewriteProgress
 
 
-def test_writer_retry_skips_completed_rows_and_reopens_only_rejected_unit(tmp_path):
+def test_writer_retry_skips_completed_rows_and_reopens_only_rejected_unit(tmp_path, monkeypatch):
+    from src.workflow.nodes import zhuque_rounds
+    class LocalScanner:
+        def __init__(self, ctx, *, standalone):
+            assert standalone
+
+        async def __call__(self, action, body, *, texts, original_marks, protected_phrases):
+            assert action == "local-tone"
+            return {key:["总而言之，"] if "总而言之，" in text else [] for key, text in texts.items()}
+    monkeypatch.setattr(zhuque_rounds, "PluginAdapter", LocalScanner)
     paragraphs = [{"id":f"p{i:04}", "text":f"请把第{i}盏灯熄了。"} for i in range(1, 5)]
     units = [{"id":p["id"]+"-s1","paragraph_id":p["id"],"old":p["text"],"occurrence":1} for p in paragraphs[:3]]
     view = {"source_sha256":"a"*64,"source_body":{"paragraphs":paragraphs},
@@ -30,20 +41,28 @@ def test_writer_retry_skips_completed_rows_and_reopens_only_rejected_unit(tmp_pa
             calls.append(key)
             if key == "p0002-s1" and calls.count(key)==1:
                 return NodeResult(status="failed",error="peer closed")
-            data = {"id":key,"reference_id":"p0004","replacement":"烦你熄一下第"+key+"盏灯。"+str(calls.count(key))}
+            if key == "p0001-s1" and calls.count(key) == 2:
+                assert "总而言之，" in item["lieflat_review"]["上一稿仍须换说法"]
+            replacement = ("总而言之，" if key == "p0001-s1" and calls.count(key) == 1 else "") + "烦你熄一下第"+key+"盏灯。"+str(calls.count(key))
+            data = {"id":key,"reference_id":"p0004","replacement":replacement}
             return NodeResult(status="completed",outputs={"patch":json.dumps(data)})
     writer = Writer()
     run = lambda: asyncio.run(writer.execute(ctx))
     assert run().status == "failed" and not (tmp_path/"out.json").exists()
     assert run().status == "completed"
-    first = json.loads((tmp_path/"out.json").read_text())["rewrites"]
-    assert calls == [u["id"] for u in units]+["p0002-s1"]
-    assert run().status == "completed" and len(calls)==4
-    state.rejection_history.append({"rejection_id":"r1","reason":"p0003-s1 称呼有误"})
-    assert run().status == "completed" and calls[4:]==["p0003-s1"]
-    second = json.loads((tmp_path/"out.json").read_text())["rewrites"]
-    assert second[:2]==first[:2] and second[2]!=first[2]
+    first = json.loads((tmp_path/"out.json").read_text(encoding="utf-8"))["rewrites"]
+    assert calls == ["p0001-s1"] + [u["id"] for u in units]+["p0002-s1"]
     assert run().status == "completed" and len(calls)==5
+    state.rejection_history.append({"rejection_id":"r1","reason":"p0003-s1 称呼有误"})
+    assert run().status == "completed" and calls[5:]==["p0003-s1"]
+    second = json.loads((tmp_path/"out.json").read_text(encoding="utf-8"))["rewrites"]
+    assert second[:2]==first[:2] and second[2]!=first[2]
+    assert run().status == "completed" and len(calls)==6
+    # Simulate a row accepted by the older writer before local scanning existed.
+    with closing(sqlite3.connect(tmp_path/"rewrite-progress.sqlite3")) as db, db:
+        old_row = {**second[0], "replacement":"总而言之，旧稿。"}
+        db.execute("UPDATE edits SET data=? WHERE id=?", (json.dumps(old_row, ensure_ascii=False), old_row["id"]))
+    assert run().status == "completed" and calls[6:] == ["p0001-s1"]
     progress = RewriteProgress(tmp_path/"rewrite-progress.sqlite3",view,["different model"])
     assert progress.rows()=={}
 

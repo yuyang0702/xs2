@@ -581,7 +581,7 @@ class WorkflowFlowMixin:
                 workflow_id=definition.workflow_id,
                 task_id=task.task_id,
                 task_name=task.name,
-                execution_order=ids, node_index=i,
+                execution_order=ids, node_index=i, disabled_ids=disabled_ids,
                 needs_approval=needs_approval,
                 on_reject_upstream=_on_reject_upstream,
                 on_node_checkpoint=_on_node_checkpoint,

@@ -133,15 +133,21 @@ def save_record(path, data):
 class PluginAdapter:
     """Only execute the local revision helper installed and attested for this workflow."""
 
-    def __init__(self, ctx):
+    def __init__(self, ctx, *, standalone=False):
         from ..runtime_guards import RUNTIME_GUARD_KEY
         from ..script_library import get_script_library
 
-        prepare = next((n for n in ctx.definition.nodes if n.id == "script_local_prepare"), None)
-        if prepare is None:
-            raise ValueError("缺少冻结的插件准备节点")
-        expected = prepare.node_params.get(RUNTIME_GUARD_KEY, {}).get("library_script_attestation")
         catalog = get_script_library()
+        prepare = next((n for n in getattr(ctx.definition, "nodes", ()) if n.id == "script_local_prepare"), None)
+        expected = prepare.node_params.get(RUNTIME_GUARD_KEY, {}).get("library_script_attestation") if prepare else None
+        if standalone and expected is None:
+            matches = [row for row in catalog.list_scripts() if row["owner"] == "xs2-novel-flywheel"
+                       and row["name"] == "local_revision"]
+            if len(matches) != 1:
+                raise ValueError("单段校读需要已启用的小说插件 local_revision 脚本")
+            expected = catalog.attest(matches[0]["group"], "local_revision", "python")
+        if expected is None:
+            raise ValueError("缺少冻结的插件准备节点")
         attestation = catalog.verify_attestation(expected)
         if attestation["script_name"] != "local_revision":
             raise ValueError("朱雀适配器需要 local_revision 脚本库")
@@ -256,7 +262,8 @@ async def reviewed_rewrites(view, body, progress, folder, visited, adapter, ask)
             if sha(candidate) in visited:
                 raise ValueError("整稿候选回到了已检测版本，请换一种表达")
         except ValueError as exc:
-            reject(progress.units, str(exc))
+            affected = re.findall(r"\bp\d+-s\d+\b", str(exc))
+            reject([key for key in affected if key in progress.units] or progress.units, str(exc))
             continue
         review = await ask(review_prompt(view, body, candidate, progress.report["rewrite_units"], rows,
                                          composition.get("lieflat_hints"), composition.get("semantic_criteria")))

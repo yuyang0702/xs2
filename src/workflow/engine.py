@@ -426,6 +426,7 @@ class WorkflowEngine(WorkflowFlowMixin, WorkflowLoopMixin):
         needs_approval: bool = False,
         on_reject_upstream: Callable | None = None,
         on_node_checkpoint: Callable | None = None,
+        disabled_ids: set[str] | None = None,
     ) -> NodeExecutionState:
         """分发节点执行 — 根据 node_type 查找插件并调用 execute()。"""
         node_type = node_def.node_type or "agent"
@@ -492,6 +493,7 @@ class WorkflowEngine(WorkflowFlowMixin, WorkflowLoopMixin):
             checkpoint=_checkpoint,
             owner_environment=self._workflow_environment(workflow_id),
             workflow_environment=self._workflow_environment,
+            disabled_node_ids=frozenset(disabled_ids or ()),
         )
 
         plugin = plugin_cls()

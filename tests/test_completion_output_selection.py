@@ -65,6 +65,52 @@ def test_extra_json_message_is_ambiguous():
     assert select(record)[1]
 
 
+@pytest.mark.parametrize('disabled', [False, True])
+def test_standalone_patch_is_rephrased_before_file_is_replaced(tmp_path, monkeypatch, disabled):
+    import asyncio
+    from src.workflow.definition import WorkflowDef, WorkflowNode
+    from src.workflow.nodes import zhuque_rounds
+    from src.workflow.nodes.base import NodeContext
+    from src.workflow.runtime_models import NodeExecutionState
+
+    target = tmp_path / 'patch.json'
+    target.write_text('previous', encoding='utf-8')
+    (tmp_path / 'source.json').write_text('{"source_body":"原段"}', encoding='utf-8')
+    requests = []
+
+    class Scanner:
+        def __init__(self, ctx, *, standalone):
+            assert standalone
+
+        async def __call__(self, action, body, *, view, patch):
+            assert action == 'local-patch' and view['source_body'] == '原段'
+            return {'feedback':'标记原句' if patch['edits'] == [] else ''}
+
+    class Manager:
+        sessions = {}
+        async def create_sub_session(self, **kwargs):
+            assert target.read_text(encoding='utf8') == 'previous'
+            requests.append(kwargs['task_description'])
+            edits = [] if len(requests) == 1 else [{'replacement':'新说法'}]
+            sid = str(len(requests))
+            self.sessions[sid] = SimpleNamespace(record=trajectory(json.dumps({'edits':edits})))
+            kwargs['on_auto_complete'](sid, 'done', 'success', '')
+            return {'success':True, 'session_id':sid}
+
+    monkeypatch.setattr(zhuque_rounds, 'PluginAdapter', Scanner)
+    node = WorkflowNode(id='agent_pl', node_type='agent', first_message='改一段', save_output_to_file=True,
+                        output_file_path='patch.json', node_params={'resumable_rewrite_input':'editor',
+                        'output_selection':'completion_tool_message','json_repair_policy':'validate_only'})
+    nodes = [node, WorkflowNode(id='script_local_candidate', node_type='script')] if disabled else [node]
+    result = asyncio.run(AgentNode().execute(NodeContext(definition=WorkflowDef(workflow_id='one', nodes=nodes),
+        node_def=node, node_state=NodeExecutionState(node_id=node.id), parameter_values={'editor':'source.json'},
+        disabled_node_ids=frozenset({'script_local_candidate'}) if disabled else frozenset(),
+        session_manager=Manager(), shared_ws=tmp_path)))
+    assert result.status == 'completed', result.error
+    assert len(requests) == 2 and '标记原句' in requests[-1]
+    assert json.loads(target.read_text(encoding='utf8'))['edits'][0]['replacement'] == '新说法'
+
+
 def test_plain_final_json_without_tool_succeeds():
     assert json.loads(select([{"type": "user", "content": "plan"}, {"type": "assistant", "content": '{"chapters": []}'}])[0]) == {"chapters": []}
 

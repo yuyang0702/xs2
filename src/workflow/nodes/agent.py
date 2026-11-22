@@ -675,6 +675,27 @@ class AgentNode(BaseNodePlugin):
                             outputs[output_var_key] = output_text
                         outputs.update(json_meta)
 
+                    if (input_key and pv.get(input_key) and (ctx.definition.get_node("script_local_candidate") is None
+                            or "script_local_candidate" in ctx.disabled_node_ids)
+                            and output_format == "json" and json.loads(output_text).get("status") != "needs_replan"):
+                        from dataclasses import replace
+                        from .zhuque_rounds import PluginAdapter
+                        from ..engine import WorkflowEngine
+                        adapter = PluginAdapter(ctx, standalone=True)
+                        review = await adapter("local-patch", "", view=view, patch=json.loads(output_text))
+                        if review["feedback"]:
+                            attempt = (node_def.node_params or {}).get("_local_tone_attempt", 0)
+                            if attempt >= 2:
+                                raise ValueError(review["feedback"])
+                            params = {**node_def.node_params, "_local_tone_attempt":attempt + 1}
+                            params.pop("first_message_source_variable", None)
+                            feedback = "\n本地校读退回上一稿。请保留原意和人物口吻，重新提交完整补丁。\n" + review["feedback"]
+                            child = replace(node_def, first_message=first_message + feedback, node_params=params)
+                            result = await self.execute(replace(ctx, node_def=child))
+                            result.token_usage = WorkflowEngine._merge_token_usage(node_token_usage, result.token_usage)
+                            result.token_usage_calls = WorkflowEngine._merge_token_usage_calls(
+                                self._get_session_token_usage_calls(sm, session_id), result.token_usage_calls)
+                            return result
                     # 所有输出门禁通过后才创建目录并落盘。
                     file_path.parent.mkdir(parents=True, exist_ok=True)
 

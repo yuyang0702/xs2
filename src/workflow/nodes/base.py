@@ -46,6 +46,7 @@ class NodeContext:
         default=None,
         repr=False,
     )
+    disabled_node_ids: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass
