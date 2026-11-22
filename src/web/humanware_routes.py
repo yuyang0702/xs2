@@ -52,7 +52,7 @@ def _voice_support():
     return _load(str(path), path.stat().st_mtime_ns)
 
 
-def _workspace(request: Request, workflow_id: str, workspace: str, *, mutate=False):
+def _workspace(request: Request, workflow_id: str, workspace: str, *, mutate=False, allow_new=False):
     from src import config
     if mutate:
         _ensure_http_mutation_allowed(request, workflow_id)
@@ -68,6 +68,8 @@ def _workspace(request: Request, workflow_id: str, workspace: str, *, mutate=Fal
         resolved = resolve_workflow_workspace_path(workflow_id, workspace, base_dir=manager._ws_manager.base_dir)
         if intended != resolved or '..' in candidate.parts:
             raise ValueError('工作区路径不在允许范围内')
+        if allow_new and not intended.exists():
+            return intended
         if not intended.is_dir():
             raise HTTPException(404, '工作区不存在')
         return manager._ws_manager.resolve_workflow_workspace(workflow_id, override=workspace).resolve()
@@ -155,11 +157,11 @@ class RulePreview(RevisionRequest):
     replacement: str = Field(max_length=400)
 
 
-def character_workspace(request, workflow_id, workspace, *, mutate=False, history_dir=None):
+def character_workspace(request, workflow_id, workspace, *, mutate=False, history_dir=None, allow_new=False):
     manager = _get_manager(request)
     if manager.get_workflow_owner(workflow_id) != OWNER:
         raise HTTPException(400, '此操作需要小说插件所属的工作流。')
-    root = _workspace(request, workflow_id, workspace, mutate=mutate)
+    root = _workspace(request, workflow_id, workspace, mutate=mutate, allow_new=allow_new)
     from src import config
     candidate = Path(workspace).expanduser()
     candidate = candidate if candidate.is_absolute() else config.BASE_DIR / candidate

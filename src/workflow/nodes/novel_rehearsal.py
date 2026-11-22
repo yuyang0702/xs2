@@ -44,7 +44,8 @@ class NovelRehearsalNode(BaseNodePlugin):
         if agent is None:
             return NodeResult(status="failed", error="分角色试演找不到当前写手配置。")
         parent = getattr(ctx.session_manager, "sessions", {}).get(ctx.parent_id)
-        model_id = override or agent.model or getattr(parent, "model_id", None)
+        rehearsal_model = await resolve_placeholders(ctx.node_def.model_override, values)
+        model_id = rehearsal_model or override or agent.model or getattr(parent, "model_id", None)
         manager = get_model_manager()
         model_id = model_id or manager.get_default_model()
         if not model_id:

@@ -16,15 +16,16 @@ from src.workflow.task_overrides import MODEL_PARAMS_OVERRIDE_KEY
     ('agent_sw', 0, True, 'cache/short/test-task.md', False, False),
     ('agent_sw', 0, True, 'cache/short/test-task.md', True, True),
 ])
-def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
-    tmp_path, monkeypatch, writer_id, slot, configured, short_context, short_definition, compact,
+@pytest.mark.parametrize('rehearsal_model', ['', 'other:reviewer'])
+def test_rehearsal_uses_configured_route_and_returns_usage_and_file(
+    tmp_path, monkeypatch, writer_id, slot, configured, short_context, short_definition, compact, rehearsal_model,
 ):
     from langchain_core.messages import AIMessage
     from src.agent import definition
     from src.core import llm_client
     from src.web import novel_plugin
 
-    node = WorkflowNode(id=f'rehearse_{writer_id}', node_type='novel_rehearsal',
+    node = WorkflowNode(id=f'rehearse_{writer_id}', node_type='novel_rehearsal', model_override=rehearsal_model,
                         node_params={'writer_node': writer_id, 'slot': slot, 'compact_short_writer': configured})
     writer = WorkflowNode(id=writer_id, agent_type='writer', model_override='book:writer',
                           node_params={MODEL_PARAMS_OVERRIDE_KEY: {'temperature': 0.42}})
@@ -33,7 +34,7 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
     calls = []
 
     class Model:
-        metadata = {'determinflow_model_id': 'book:writer'}
+        metadata = {'determinflow_model_id': rehearsal_model or 'book:writer'}
 
         async def ainvoke(self, messages):
             calls.append(tuple(message.content for message in messages))
@@ -41,7 +42,8 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
                              usage_metadata={'input_tokens': 10, 'output_tokens': 6, 'total_tokens': 16})
 
     def create(**kwargs):
-        assert kwargs['model_override'] == 'book:writer'
+        assert kwargs['model_override'] == (rehearsal_model or 'book:writer')
+        assert writer.model_override == 'book:writer'
         assert kwargs['model_params']['temperature'] == 0.42
         assert kwargs['provider_retries_enabled'] is False
         return Model()
@@ -97,4 +99,4 @@ def test_rehearsal_uses_writer_route_and_returns_usage_and_file(
         assert 'speech 超出 240 字' in calls[1][0] and calls[1][1] == 'own input'
     attempts = 2 if slot else 1
     assert len(calls) == len(result.token_usage_calls) == attempts
-    assert result.token_usage['book:writer']['total_tokens'] == 16 * attempts
+    assert result.token_usage[rehearsal_model or 'book:writer']['total_tokens'] == 16 * attempts

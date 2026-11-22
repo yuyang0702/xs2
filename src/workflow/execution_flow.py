@@ -130,6 +130,51 @@ def _retract_rejected_node_outputs(
         )
 
 
+def _refresh_rejected_chain(definition, task, producer):
+    """Replay completed transformations of a superseded output on a linear path."""
+    if not producer.rejection_history:
+        return
+    rejection = producer.rejection_history[-1]
+    validator_id = rejection.get("validator_node_id")
+    validator = task.node_states.get(validator_id)
+    cutoff = rejection.get("occurred_at")
+    if (rejection.get("resolution") != "passed" or not cutoff
+            or validator is None or validator.status != "pending"):
+        return
+
+    # Follow only an unambiguous dependency chain. Never reopen another
+    # branch, or speculate about side effects beyond the rejecting validator.
+    stale = []
+    seen = {producer.node_id}
+    current = producer.node_id
+    while current != validator_id:
+        successors = [edge.target for edge in definition.edges if edge.source == current]
+        if len(successors) != 1 or successors[0] in seen:
+            return
+        current = successors[0]
+        seen.add(current)
+        if current == validator_id:
+            break
+        state = task.node_states.get(current)
+        if state is None or definition.get_node(current) is None:
+            return
+        if (normalize_node_status(state.status) == "completed" and state.completed_at
+                and state.completed_at <= cutoff):
+            stale.append(state)
+
+    for state in reversed(stale):
+        # Unwind variables in reverse dependency order. Leave workspace files
+        # to their owning nodes, which will regenerate them before validation.
+        _retract_rejected_node_outputs(task.parameter_values, state, None)
+        task.node_states[state.node_id] = NodeExecutionState(
+            node_id=state.node_id, attempt_count=state.attempt_count,
+            attempt_history=state.attempt_history, token_usage=state.token_usage,
+            token_usage_calls=state.token_usage_calls, rejection_history=state.rejection_history,
+            iteration_history=state.iteration_history, output_repair_history=state.output_repair_history,
+            reject_upstream_count=state.reject_upstream_count,
+        )
+
+
 class WorkflowFlowMixin:
     """为 WorkflowEngine 提供非循环控制流调度。"""
 
@@ -369,6 +414,8 @@ class WorkflowFlowMixin:
             )
             if existing_state and existing_status in ("skipped", "completed"):
                 existing_state.status = existing_status
+                if existing_status == "completed":
+                    _refresh_rejected_chain(definition, task, existing_state)
                 logger.debug(
                     "[ENGINE] 节点状态 %s，跳过: node=%s, task=%s",
                     existing_state.status, node_id, task.task_id,
@@ -707,6 +754,8 @@ class WorkflowFlowMixin:
                     i += 1
                     continue
                 return "failed"
+            if normalize_node_status(exec_state.status) == "completed":
+                _refresh_rejected_chain(definition, task, exec_state)
             await self._save_task_state(definition.workflow_id, task)
             self._push_wf_task_update(definition.workflow_id, task)
             i += 1

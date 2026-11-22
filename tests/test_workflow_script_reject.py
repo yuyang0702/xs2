@@ -1086,14 +1086,21 @@ def test_three_loop_items_keep_unique_rejection_ids_and_complete_audit():
     ]
 
 
-def test_reject_upstream_retries_agent_in_new_session(tmp_path, monkeypatch):
+@pytest.mark.parametrize("via_review", [False, True])
+def test_reject_upstream_retries_agent_in_new_session(tmp_path, monkeypatch, via_review):
     workflow_id = "wf-reject-original-session"
     workflows_dir = tmp_path / "workflows"
     script_dir = workflows_dir / workflow_id / "script"
     script_dir.mkdir(parents=True)
+    reviewed_file = "review.txt" if via_review else "l1.txt"
+    (script_dir / "review.py").write_text(
+        "from pathlib import Path\n"
+        "Path('review.txt').write_bytes(Path('l1.txt').read_bytes())\n",
+        encoding="utf-8",
+    )
     (script_dir / "validate.py").write_text(
         "from pathlib import Path\n"
-        "value = Path('l1.txt').read_text(encoding='utf-8')\n"
+        f"value = Path('{reviewed_file}').read_text(encoding='utf-8')\n"
         "if value != 'valid':\n"
         "    print('<WF_REJECT_UPSTREAM target=\"agent_l1\">输出必须为 valid</WF_REJECT_UPSTREAM>')\n"
         "else:\n"
@@ -1124,10 +1131,16 @@ def test_reject_upstream_retries_agent_in_new_session(tmp_path, monkeypatch):
             "max_reject_count": 2,
         },
     )
+    nodes = [agent_node, validator_node]
+    if via_review:
+        nodes.insert(1, WorkflowNode(id="review", node_type="script", node_params={
+            "script_type": "python", "script_name": "review",
+        }))
+    order = [node.id for node in nodes]
     definition = WorkflowDef(
         workflow_id=workflow_id,
-        nodes=[agent_node, validator_node],
-        edges=[WorkflowEdge(source="agent_l1", target="script_validate")],
+        nodes=nodes,
+        edges=[WorkflowEdge(source=a, target=b) for a, b in zip(order, order[1:])],
     )
     definition._rebuild_caches()
     task = WorkflowTask(
@@ -1154,7 +1167,7 @@ def test_reject_upstream_retries_agent_in_new_session(tmp_path, monkeypatch):
     first_result = asyncio.run(engine._execute_node_sequence(
         definition=definition,
         task=task,
-        node_ids=["agent_l1", "script_validate"],
+        node_ids=order,
         disabled_ids=set(),
         shared_ws=workspace,
         parent_id="workflow-main",
@@ -1178,7 +1191,7 @@ def test_reject_upstream_retries_agent_in_new_session(tmp_path, monkeypatch):
     result = asyncio.run(engine._execute_node_sequence(
         definition=definition,
         task=task,
-        node_ids=["agent_l1", "script_validate"],
+        node_ids=order,
         disabled_ids=set(),
         shared_ws=workspace,
         parent_id="workflow-main",

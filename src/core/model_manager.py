@@ -513,6 +513,22 @@ class ModelManager:
         logger.warning("没有任何模型可用；服务可启动，但发送消息前需要配置供应商")
         return None
 
+    def get_novel_model_routes(self) -> dict[str, str]:
+        """Return explicit provider-qualified model choices for novel production."""
+        roles = self.config.get("novel_model_routes", {})
+        if not isinstance(roles, dict):
+            raise ValueError("小说角色模型配置必须是对象")
+        available = self.get_all_models()
+        routes = {}
+        for role in ("analysisModel", "writerModel", "polishModel", "rehearsalModel"):
+            model = roles.get(role)
+            if model is None:
+                continue
+            if not isinstance(model, str) or model not in available:
+                raise ValueError(f"小说角色 {role} 的供应商或模型未配置")
+            routes[role] = model
+        return routes
+
     def get_default_params(self) -> Dict:
         """获取全局默认模型参数"""
         defaults = self.config.get("default_params", {})

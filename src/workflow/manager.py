@@ -144,6 +144,15 @@ class WorkflowManager(
         resolver = self._get_effective_agent_resolver()
         from .runtime_guards import freeze_workflow_runtime_guards
 
+        rehearsals = [node for node in definition.get("nodes", [])
+                      if node.get("node_type") == "novel_rehearsal" and not node.get("model_override")]
+        if rehearsals:
+            from src.core.model_manager import get_model_manager
+            model = get_model_manager().get_novel_model_routes().get("rehearsalModel")
+            if model:
+                for node in rehearsals:
+                    node["model_override"] = model
+
         return freeze_workflow_runtime_guards(
             definition,
             workflow_dir=self._resolve_wf_dir(workflow_id),

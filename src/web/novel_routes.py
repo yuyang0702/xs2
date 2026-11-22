@@ -23,7 +23,7 @@ import httpx
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from src.config import DATA_DIR, WORKFLOW_WORKSPACES_DIR
@@ -69,6 +69,8 @@ def novel_resources(request: Request):
             from src.core.model_manager import get_model_manager
             models = get_model_manager()
             defaults = recipe(models.get_all_providers(), models.get_default_model())
+            defaults.update({role: model for role, model in models.get_novel_model_routes().items()
+                             if role != "rehearsalModel"})
         return {"owner": "xs2-novel-flywheel", "workflows": resources,
                 **({'new_book_defaults': defaults} if defaults else {})}
     except ValueError as error:
@@ -390,6 +392,49 @@ def atomic_json(target: Path, value: object) -> None:
         os.replace(name, target)
     finally:
         Path(name).unlink(missing_ok=True)
+
+
+class ZhuqueOptions(BaseModel):
+    enabled: StrictBool
+    reference_text: str = Field(default="", max_length=10_000_000, pattern=r"^[^\x00-\x08\x0b\x0c\x0e-\x1f\x7f]*$")
+
+
+class ZhuqueOptionsSave(ZhuqueOptions):
+    enabled: StrictBool = False
+    workflow_id: str
+    workspace: str
+
+
+def read_zhuque_options(target: Path) -> ZhuqueOptions:
+    try:
+        return ZhuqueOptions.model_validate_json(target.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return ZhuqueOptions(enabled=False, reference_text="")
+    except (ValidationError, UnicodeDecodeError) as error:
+        raise HTTPException(409, "本书的朱雀设置文件格式有误。") from error
+
+
+@router.get("/zhuque-options", response_model=ZhuqueOptions)
+def get_zhuque_options(request: Request, workflow_id: str, workspace: str):
+    from .humanware_routes import character_workspace
+    root = character_workspace(request, workflow_id, workspace, allow_new=True)
+    return read_zhuque_options(safe_target(root, "zhuque-options.json"))
+
+
+@router.patch("/zhuque-options", response_model=ZhuqueOptions)
+def save_zhuque_options(request: Request, payload: ZhuqueOptionsSave):
+    from .humanware_routes import character_workspace
+    _ensure_http_mutation_allowed(request, payload.workflow_id)
+    _ensure_workflow_writable(request, payload.workflow_id)
+    root = character_workspace(request, payload.workflow_id, payload.workspace, allow_new=True)
+    changes = payload.model_dump(include={"enabled", "reference_text"}, exclude_unset=True)
+    if not changes:
+        raise HTTPException(422, "请指定朱雀检测开关或参考稿。")
+    with _lock:
+        target = safe_target(root, "zhuque-options.json")
+        options = read_zhuque_options(target).model_copy(update=changes)
+        atomic_json(target, options.model_dump())
+    return options
 
 
 @lru_cache(maxsize=2)

@@ -669,6 +669,19 @@ export async function saveNovelProject(workflow_id: string, workspace: string, s
   return request<{ success: boolean; workspace: string; revision: number }>("/novel-console/projects", { method: "PUT", body: JSON.stringify({ workflow_id, workspace, state }) });
 }
 
+export type ZhuqueOptions = { enabled: boolean; reference_text: string };
+
+export function getNovelZhuqueOptions(workflowId: string, workspace: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace });
+  return request<ZhuqueOptions>(`/novel-console/zhuque-options?${query}`, { signal });
+}
+
+export function saveNovelZhuqueOptions(workflowId: string, workspace: string, options: Partial<ZhuqueOptions>) {
+  return request<ZhuqueOptions>("/novel-console/zhuque-options", {
+    method: "PATCH", body: JSON.stringify({ workflow_id: workflowId, workspace, ...options }),
+  });
+}
+
 export async function listNovelProjects() {
   return request<{ projects: Array<{ workspace: string; state: Record<string, unknown>; progress?: NovelProgress }> }>("/novel-console/projects");
 }
@@ -722,7 +735,7 @@ export async function getWritingLibraryUsage(workflowId: string, workspace: stri
 
 export async function getNovelAdoptedWriting(workflowId: string, workspace: string) {
   const query = new URLSearchParams({ workflow_id: workflowId, workspace });
-  return request<{ version: number; selected_candidate_ids: string[]; selected_style_ids: string[]; selected_conflict_ids: string[]; styles: Array<{choice_id: string; title: string; guidance: string}>; conflicts: Array<{choice_id: string; title: string; guidance: string}>; mechanisms: Array<{candidate_id: string; mechanism: string}> }>(`/novel-console/adopted-writing?${query}`);
+  return request<{ version: number; selected_candidate_ids: string[]; selected_style_ids: string[]; selected_conflict_ids: string[]; styles: Array<{choice_id: string; title: string; guidance: string}>; conflicts: Array<{choice_id: string; title: string; guidance: string}>; mechanisms: Array<{candidate_id: string; mechanism: string; transfer_guidance?: string; constraints?: string[]}> }>(`/novel-console/adopted-writing?${query}`);
 }
 
 export async function getNovelReferenceCandidates(workflowId: string, workspace: string) {

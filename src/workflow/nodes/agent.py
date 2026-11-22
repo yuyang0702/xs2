@@ -309,6 +309,24 @@ class AgentNode(BaseNodePlugin):
                 )
                 return NodeResult(status="failed", error=str(exc))
 
+        rounds_input = (node_def.node_params or {}).get("zhuque_rounds_input")
+        if rounds_input:
+            from .zhuque_rounds import run_node
+            identity = [ctx.task_id, node_def.id, model_override, resolved_agent_type, runtime_guard, model_params_override]
+            return await run_node(self, ctx, rounds_input, identity, resolved_system_prompt)
+
+        input_key = (node_def.node_params or {}).get("resumable_rewrite_input")
+        if input_key and pv.get(input_key):
+            from .rewrite_progress import run_resumable
+            try:
+                view_path = resolve_workspace_file_path(ctx.shared_ws, pv[input_key])
+                view = json.loads(view_path.read_text(encoding="utf-8"))
+                if "rewrite_units" in view.get("zhuque_review", {}):
+                    identity = [ctx.task_id, node_def.id, model_override, resolved_agent_type, runtime_guard, model_params_override]
+                    return await run_resumable(self, ctx, view_path, view, identity)
+            except (ValueError, KeyError, OSError, TypeError) as exc:
+                return NodeResult(status="failed", error=f"逐段改写无法续跑：{exc}")
+
         # 读取并解析自定义变量块（template_values）
         raw_template_vars = (node_def.node_params or {}).get("template_values", {})
         # 兼容两种格式：前端保存的 JSON 字符串 或 直接传入的 dict

@@ -83,7 +83,11 @@ def character_model(request, manager, root, purpose, *, include_writer=False):
     if not agent or prompt_manager is None:
         raise ValueError('场景试读无法读取当前分场写手的提示。')
     writer = PromptBuilder(prompt_manager=prompt_manager).build_static_workflow_base(node['agent_type'])
-    return (*settings, {'label': node.get('label', node_id), 'system': writer})
+    trial_writer = {'label': node.get('label', node_id), 'system': writer}
+    rehearsal = models.get_novel_model_routes().get('rehearsalModel')
+    if rehearsal:
+        trial_writer['rehearsal_model'] = rehearsal
+    return (*settings, trial_writer)
 
 
 async def _receive_model_reply(llm, messages, on_output):
