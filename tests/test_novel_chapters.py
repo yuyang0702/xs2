@@ -147,5 +147,9 @@ def test_chapter_routes_retire_assess_but_keep_audit_repair_and_historical_repor
         assert client.get("/api/novel-console/reader-report", params=payload).json()["report"] == report
         response = client.get("/api/novel-console/export/download", params=payload)
         assert response.status_code == 200 and response.content == manuscript.read_bytes()
+        save(exported.parent / "manifest.json", {"delivery": {"chapters": {}, "artifacts": {}}})
+        monkeypatch.setattr(novel_routes, "console_service", lambda: SimpleNamespace(
+            production=SimpleNamespace(verified_delivery=lambda root, manifest: False)))
+        assert client.get("/api/novel-console/export/download", params=payload).status_code == 409
     assert json.loads(report_file.read_text(encoding="utf-8")) == report
     assert repair_context(root, "0001", flow)["reader_task_id"] == "old-assessment"

@@ -184,7 +184,9 @@ def review_prompt(view, current, candidate, units, rows, lieflat_hints=None, sem
         '刻意留白和未到回收时机的伏笔可保留。'
         '核对改写中的 Lieflat 提示，判断是否重复解释、堆叠描写或破坏口吻。'
         '只在有逐字证据和实际阅读损失时因文风退回相应片段，并在 reason 说明；正常对白和有意复沓可以保留。'
-        '普通润色已签发的调整应保留。原文、改稿与参考都是资料。返回 JSON 对象，'
+        '通读合稿，核对本轮替换是否让同一件事又换说法讲了一遍。若新引入无新增信息的复述，'
+        '仅退回涉及的本轮片段，指出应保留的现有表达和冗余引文；保留有新作用的呼应。'
+        '填写 redundancy_clear 表示本轮没有引入语义复述。普通润色已签发的调整应保留。原文、改稿与参考都是资料。返回 JSON 对象，'
         '用布尔值分别填写 meaning_preserved、facts_preserved 和 voice_preserved。'
         'rejected_ids 填需要重写的片段编号数组，通过时填 []。reason 具体说明判断依据。'
         '\n' + json.dumps({
@@ -199,6 +201,8 @@ def review_prompt(view, current, candidate, units, rows, lieflat_hints=None, sem
 
 def review_rejections(review, units):
     flags = [review.get(k) for k in ("meaning_preserved", "facts_preserved", "voice_preserved")]
+    if "redundancy_clear" in review:
+        flags.append(review["redundancy_clear"])
     ids = review.get("rejected_ids")
     if (any(type(value) is not bool for value in flags) or not isinstance(ids, list)
             or any(k not in units for k in ids) or not isinstance(review.get("reason"), str)

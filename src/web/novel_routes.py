@@ -760,6 +760,10 @@ async def download_novel_manuscript(request: Request, workflow_id: str, workspac
     target = safe_target(root, "export/manuscript.md")
     if not target.is_file():
         raise HTTPException(404, "本书尚未生成成品，请先完成导出步骤")
+    manifest = read_json_file(safe_target(root, "export/manifest.json"), {})
+    if isinstance(manifest, dict) and "delivery" in manifest:
+        if console_service().production.verified_delivery(root, manifest) is not True:
+            raise HTTPException(409, "章节正文与成品不一致，请重新导出后下载")
     download_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", filename)[:160].strip() or "小说成品.md"
     if not download_name.lower().endswith(".md"):
         download_name += ".md"
