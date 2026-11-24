@@ -25,7 +25,7 @@ def test_writer_retry_skips_completed_rows_and_reopens_only_rejected_unit(tmp_pa
     view = {"source_sha256":"a"*64,"source_body":{"paragraphs":paragraphs},
             "zhuque_review":{"rewrite_units":units,"reference_paragraphs":["p0004"]}}
     (tmp_path/"in.json").write_text(json.dumps(view),encoding="utf8")
-    node = WorkflowNode(id="writer",agent_type="writer",model_override="lingsuan-google:gemini-4-neon",
+    node = WorkflowNode(id="writer",agent_type="writer",model_override="lingsuan-google:gemini-4-carbon",
                         node_params={"resumable_rewrite_input":"editor"}, output_variable="patch",
                         output_file_path="out.json",save_output_to_file=True)
     state = SimpleNamespace(session_id="",rejection_history=[])

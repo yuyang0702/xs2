@@ -340,8 +340,8 @@ async def run_node(node, ctx, input_key, identity, resolved_prompt):
         input_path = io_path(resolve_workspace_file_path(ctx.shared_ws, ctx.parameter_values[input_key]))
         view = json.loads(input_path.read_bytes())
         adapter = PluginAdapter(ctx) if view["enabled"] else None
-        if view["enabled"] and not str(identity[2]).endswith(":gemini-4-neon"):
-            raise ValueError("整稿改写节点须配置 Gemini 4 Neon")
+        if view["enabled"] and not str(identity[2]).endswith(":gemini-4-carbon"):
+            raise ValueError("整稿改写节点须配置 Gemini 4 Carbon")
         folder = input_path.parent / "zhuque-rounds" / sha(encode([view, identity, getattr(adapter, "identity", None)]))
         params = {k: v for k, v in definition.node_params.items() if k not in (
             "zhuque_rounds_input", "first_message_source_variable", "resumable_rewrite_input",

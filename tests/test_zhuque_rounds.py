@@ -49,7 +49,7 @@ def setup(tmp_path, detector, monkeypatch, reference="", body=BODY):
             "reference_text": reference}
     (tmp_path/"source.json").write_text(json.dumps(view), encoding="utf8")
     definition = WorkflowNode(id="rounds", node_params={"zhuque_rounds_input": "source"},
-                              agent_type="writer", model_override="lingsuan-google:gemini-4-neon",
+                              agent_type="writer", model_override="lingsuan-google:gemini-4-carbon",
                               output_variable="receipt", output_file_path="result.json", save_output_to_file=True)
     ctx = NodeContext(definition=SimpleNamespace(variables=[]), node_def=definition, shared_ws=tmp_path,
                       node_state=SimpleNamespace(session_id=""), parameter_values={"source": "source.json"},
