@@ -230,9 +230,13 @@ class WorkflowGateway:
     label: str = ""                        # 展示名（默认 "并行网关" / "汇聚网关"）
     position: dict[str, float] = field(default_factory=lambda: {"x": 0, "y": 0})
     converge_gateway_id: str | None = None  # 仅 parallel 有值，指向配对汇聚网关
+    max_list_iterations: int | None = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        value = asdict(self)
+        if self.max_list_iterations is None:
+            value.pop("max_list_iterations")
+        return value
 
     @classmethod
     def from_dict(cls, data: dict) -> "WorkflowGateway":
@@ -242,6 +246,7 @@ class WorkflowGateway:
             label=data.get("label", ""),
             position=data.get("position", {"x": 0, "y": 0}),
             converge_gateway_id=data.get("converge_gateway_id"),
+            max_list_iterations=data.get("max_list_iterations"),
         )
 
 

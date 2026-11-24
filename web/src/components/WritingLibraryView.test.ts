@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { after, afterEach, test } from "node:test";
 import { Window } from "happy-dom";
 import type { GlobalDialog } from "./ui/use-dialog";
-import type { WritingLibraryDeleteResult, WritingLibraryItem } from "../lib/api";
+import type { CrossChapterAnalysis, WritingLibraryDeleteResult, WritingLibraryItem } from "../lib/api";
+import { localCorpusPath, prepareReferenceCorpus, urlCorpusPath } from "../lib/reference-source";
 
 const dom = new Window({ url: "http://localhost/" });
 for (const name of ["window", "document", "Node", "Text", "HTMLElement", "Element", "Event", "MouseEvent", "navigator", "sessionStorage"]) {
@@ -15,6 +16,7 @@ Object.assign(globalThis, { React });
 const { createRoot } = await import("react-dom/client");
 const { DialogContext } = await import("./ui/use-dialog");
 const { default: WritingLibraryView } = await import("./WritingLibraryView");
+const { default: NovelReferenceUrlImport } = await import("./NovelReferenceUrlImport");
 let root: ReturnType<typeof createRoot> | undefined;
 const originalFetch = globalThis.fetch;
 let confirmResult: ((value: boolean | null) => void) | undefined;
@@ -44,7 +46,7 @@ function button(label: string) {
 async function click(target: HTMLElement) { await act(async () => target.click()); }
 async function confirm(value: boolean) { await act(async () => confirmResult?.(value)); }
 
-async function mount(items: WritingLibraryItem[] = exampleItems, projectPov = "third_person") {
+async function mount(items: WritingLibraryItem[] = exampleItems, projectPov = "third_person", analysis?: CrossChapterAnalysis) {
   deleteCalls = [];
   deleteResult = async ids => response({ success: true, deleted_ids: ids, missing_ids: [], failed: [] });
   globalThis.fetch = async (input, init) => {
@@ -56,7 +58,8 @@ async function mount(items: WritingLibraryItem[] = exampleItems, projectPov = "t
       return deleteResult(ids);
     }
     if (url.endsWith("/library")) return response({ items });
-    if (url.includes("/library/")) return response({ manifest: items[0], profile: {}, candidates: { candidates: [] } });
+    if (url.includes("/source-excerpt?start=20&end=23")) return response({source_sha256: "sha", start: 20, end: 23, before: "前文。", excerpt: "旧钥匙", after: "开了锁。"});
+    if (url.includes("/library/")) return response({ manifest: items.find(item => url.endsWith("/" + item.id)), profile: {cross_chapter_analysis: analysis}, candidates: { candidates: [] } });
     throw new Error(`Unexpected request: ${url}`);
   };
   const dialog: GlobalDialog = {
@@ -74,6 +77,77 @@ async function mount(items: WritingLibraryItem[] = exampleItems, projectPov = "t
       onAttach: async () => {}, onBack: () => {}, onConfirm: () => {},
     }))));
 }
+
+test("library type filter shows legacy unknowns and selects only matching items", async () => {
+  await mount(["short_full", "serial_chapters", "serial_full", undefined].map((mode, i) => ({
+    ...exampleItems[0], id: String(i), name: "资料" + i, source_mode: mode,
+    source_coverage: mode === "serial_full" ? {chapter_count: 8, analyzed_chapter_count: 6, missing_chapter_count: 2, complete: false} : undefined,
+  })));
+  assert.match(document.body.textContent!, /已分析 6\/8 章 · 2 章待补/);
+  const select = document.querySelector<HTMLSelectElement>('[aria-label="筛选来源类型"]')!;
+  assert.deepEqual([...select.options].map(option => option.textContent), ["全部类型", "短篇全文", "长篇章节样本", "长篇全文", "类型待判断"]);
+  await act(async () => { select.value = "serial_full"; select.dispatchEvent(new Event("change", {bubbles: true})); });
+  await click(document.querySelector<HTMLInputElement>('[aria-label="全选写法"]')!);
+  assert.equal(document.querySelectorAll("article").length, 1);
+  assert.match(document.querySelector("article")!.textContent!, /资料2/);
+  await act(async () => { select.value = "unknown"; select.dispatchEvent(new Event("change", {bubbles: true})); });
+  assert.equal(button("批量删除").disabled, true);
+  assert.match(document.querySelector("article")!.textContent!, /资料3.*类型待判断.*章节覆盖未记录/);
+});
+
+test("reader exposes the last chapter, uncertain findings and verified source context", async () => {
+  const chapters = Array.from({length: 21}, (_, i) => ({id: String(i + 1), title: `目录章 ${i + 1}`, start: i * 20, end: i * 20 + 20}));
+  await mount([{...exampleItems[0], source_mode: "serial_full", source_sha256: "sha", source_coverage: {
+    chapters, analyzed_chapters: chapters.slice(0, -1).map(chapter => chapter.id), missing_chapters: ["21"], complete: false,
+  }}], "", {chapter_observations: [], findings: [{id: "f1", dimension: "foreshadowing", status: "possible", statement: "钥匙可能指向旧案", reason: "", limits: "尚无直接回收", evidence: [
+    {role: "after", chapter_id: "2", source_start: 20, source_end: 23, excerpt: "旧钥匙"},
+  ]}], limitations: [], phase_pacing: []});
+  await click(button("查看具体写法"));
+  assert.match(document.body.textContent!, /伏笔与回收 · 待核实.*钥匙可能指向旧案/s);
+  assert.match(document.body.textContent!, /后文 · 目录章 2.*\[20, 23\)/);
+  await click(button("查看原文上下文"));
+  assert.equal(document.querySelector("mark")!.textContent, "旧钥匙");
+  assert.match(document.body.textContent!, /前文。旧钥匙开了锁/);
+  await click(button("下一页"));
+  assert.match(document.body.textContent!, /目录章 21.*待补分析/);
+});
+
+test("whole URL mode requires an inspected directory and submits every chapter across pages", async () => {
+  const chapters = Array.from({length: 205}, (_, i) => ({index: i + 1, url: `https://fanqienovel.com/reader/${i}`, title: `章节 ${i + 1}`, selected: i < 3}));
+  let submitted: {source_mode: string; chapters: typeof chapters} | undefined;
+  let savedMode = "";
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith("/inspect")) return response({chapters, catalog_complete: true, work_finished: null});
+    submitted = JSON.parse(String(init?.body));
+    return response({path: "references/url-imported-corpus.txt", chapter_count: 205, source_mode: "serial_full"});
+  };
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  await act(async () => root?.render(createElement(NovelReferenceUrlImport, {workflowId: "test", workspace: "book", mode: "serial_full", busy: false, disabled: false, setBusy: () => {}, onImport: (_path, mode) => { savedMode = mode; }})));
+  const url = document.querySelector<HTMLInputElement>('[aria-label="番茄小说作品网址"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!.call(url, "https://fanqienovel.com/page/123");
+    url.dispatchEvent(new Event("input", {bubbles: true}));
+  });
+  assert.equal(button("导入整本目录").disabled, true);
+  await click(button("识别章节"));
+  assert.equal(button("导入整本目录").disabled, false);
+  assert.equal(document.querySelectorAll('input[type="checkbox"]').length, 20);
+  await click(button("导入整本目录"));
+  assert.equal(submitted?.chapters.length, 205);
+  assert.equal(submitted?.source_mode, "serial_full");
+  assert.equal(savedMode, "serial_full");
+});
+
+test("new local files supersede old URL samples and preserve each file in input order", async () => {
+  await assert.rejects(prepareReferenceCorpus([], urlCorpusPath, "serial_full", "serial_chapters"), /导入完整目录/);
+  await assert.rejects(prepareReferenceCorpus([], urlCorpusPath, "serial_full"), /没有完整目录记录/);
+  assert.deepEqual(await prepareReferenceCorpus([], urlCorpusPath, "auto", "serial_chapters"), {path: urlCorpusPath, mode: "serial_chapters"});
+  const files = [{name: "上.txt", text: async () => "第一章"}, {name: "下.md", text: async () => "第二章"}];
+  assert.deepEqual(await prepareReferenceCorpus(files, urlCorpusPath, "serial_full", "serial_chapters"), {
+    path: localCorpusPath, mode: "serial_full", content: "===== SOURCE FILE: 上.txt =====\n\n第一章\n\n===== SOURCE FILE: 下.md =====\n\n第二章",
+  });
+  await assert.rejects(prepareReferenceCorpus([{name: "空.txt", text: async () => ""}], urlCorpusPath, "serial_full"), /非空/);
+});
 
 test("library cards and reader distinguish source narration from supported target views", async () => {
   await mount([{ ...exampleItems[0], pov: ["third_person"], pov_metadata: {

@@ -190,14 +190,14 @@ class WorkflowLoopMixin:
 
     def _snapshot_node_for_iteration(
         self, node_state: NodeExecutionState, iteration: int,
-        parameter_values: dict[str, str],
+        parameter_values: dict[str, str], *, compact: bool = False,
     ):
         """将节点当前状态快照推入 iteration_history。"""
         snapshot = {
             "iteration": iteration,
             "status": node_state.status,
-            "summary": node_state.summary,
-            "outputs": dict(node_state.outputs),
+            "summary": node_state.summary[:200] if compact else node_state.summary,
+            "outputs": {} if compact else dict(node_state.outputs),
             "started_at": node_state.started_at,
             "completed_at": node_state.completed_at,
             "error": node_state.error,
@@ -425,11 +425,18 @@ class WorkflowLoopMixin:
             logger.error(f"循环网关：未知模式 {mode}")
             return "failed"
 
-        if len(items) > MAX_LOOP_ITERATIONS:
+        limit = MAX_LOOP_ITERATIONS
+        gateway = definition.get_gateway(gateway_id)
+        if mode == "list" and gateway and gateway.max_list_iterations is not None:
+            limit = gateway.max_list_iterations
+            if type(limit) is not int or not 1 <= limit <= 100_000:
+                logger.error("列表循环上限无效: %r", limit)
+                return "failed"
+        if len(items) > limit:
             logger.error(
                 "循环网关：迭代数 %s 超过上限 %s，拒绝不完整执行",
                 len(items),
-                MAX_LOOP_ITERATIONS,
+                limit,
             )
             return "failed"
 
@@ -546,6 +553,8 @@ class WorkflowLoopMixin:
                     on_node_started=on_node_started,
                     needs_approval=needs_approval,
                     run_record=run_record,
+                    entry_node_id=continue_target,
+                    loop_gateway_id=gateway_id,
                 )
                 if body_result in {"failed", "retry_waiting"}:
                     cursor["phase"] = body_result
@@ -561,6 +570,7 @@ class WorkflowLoopMixin:
                     if nid in task.node_states:
                         self._snapshot_node_for_iteration(
                             task.node_states[nid], idx, task.parameter_values,
+                            compact=len(items) > MAX_LOOP_ITERATIONS,
                         )
                 cursor.update({
                     "active_index": None,
@@ -597,6 +607,7 @@ class WorkflowLoopMixin:
         shared_ws: Path | None, parent_id: str,
         on_node_started: Callable, needs_approval: bool,
         run_record: WorkflowRunRecord,
+        *, entry_node_id: str, loop_gateway_id: str | None = None,
     ) -> str:
         """执行循环体内的节点序列，支持并行网关和条件网关（不嵌套循环）。
 
@@ -612,28 +623,12 @@ class WorkflowLoopMixin:
             if e.source in all_ids and e.target in all_ids:
                 adj.setdefault(e.source, []).append(e.target)
 
-        # 找 body_nodes 中没有入边（或入边来自循环网关）的入口节点
-        rev_adj: dict[str, list[str]] = {}
-        for e in definition.edges:
-            rev_adj.setdefault(e.target, []).append(e.source)
-
-        entry_nodes: list[str] = []
-        for nid in body_nodes:
-            upstream = rev_adj.get(nid, [])
-            # 入口节点的上游要么为空，要么只连接到网关
-            if not upstream or all(
-                uid in {g.id for g in definition.gateways} for uid in upstream
-            ):
-                entry_nodes.append(nid)
-        if not entry_nodes:
-            entry_nodes = body_nodes[:1]
-
         # 遍历 body_nodes 及其内部的网关，逐个执行
         executed: set[str] = set()
         gateway_ids_set = {g.id for g in definition.gateways}
-        current = entry_nodes[0]
+        current = entry_node_id
 
-        while current and current not in executed:
+        while current and current != loop_gateway_id and current not in executed:
             if current in disabled_ids:
                 executed.add(current)
                 next_nodes = adj.get(current, [])

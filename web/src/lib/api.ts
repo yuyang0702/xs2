@@ -653,15 +653,15 @@ export async function writeNovelWorkspaceText(workflowId: string, workspace: str
 
 export type PublicChapterLink = { index: number; title: string; url: string; selected?: boolean };
 
-export async function inspectNovelImportUrl(url: string) {
-  return request<{ url: string; title: string; detected_type: string; chapters: PublicChapterLink[]; has_page_text: boolean; warnings?: string[] }>("/novel-console/import-url/inspect", {
-    method: "POST", body: JSON.stringify({ url }),
+export async function inspectNovelImportUrl(url: string, signal?: AbortSignal) {
+  return request<{ url: string; title: string; detected_type: string; chapters: PublicChapterLink[]; catalog_complete?: boolean; work_finished?: boolean | null; has_page_text: boolean; warnings?: string[] }>("/novel-console/import-url/inspect", {
+    method: "POST", body: JSON.stringify({ url }), signal,
   });
 }
 
-export async function importNovelUrl(payload: { workflow_id: string; workspace: string; url: string; source_mode: string; chapters: PublicChapterLink[] }) {
-  return request<{ success: boolean; path: string; manifest_path: string; title: string; chapter_count: number; characters: number; warnings?: string[] }>("/novel-console/import-url/fetch", {
-    method: "POST", body: JSON.stringify(payload),
+export async function importNovelUrl(payload: { workflow_id: string; workspace: string; url: string; source_mode: string; chapters: PublicChapterLink[] }, signal?: AbortSignal) {
+  return request<{ success: boolean; path: string; manifest_path: string; title: string; chapter_count: number; characters: number; source_mode?: string; warnings?: string[] }>("/novel-console/import-url/fetch", {
+    method: "POST", body: JSON.stringify(payload), signal,
   });
 }
 
@@ -693,10 +693,26 @@ export async function deleteNovelProject(workflowId: string, workspace: string) 
   });
 }
 
+export type SourceCoverage = {
+  chapter_count?: number; analyzed_chapter_count?: number; missing_chapter_count?: number;
+  window_count?: number; analyzed_window_count?: number; completeness_basis?: string; work_finished?: boolean | null;
+  chapters?: Array<{id: string; title: string; start: number; end: number}>;
+  analyzed_chapters?: string[]; missing_chapters?: string[]; complete?: boolean;
+};
+
+type ChapterEvidence = {role?: string; chapter_id: string; source_start: number; source_end: number; excerpt: string};
+export type CrossChapterAnalysis = {
+  findings: Array<{id: string; dimension: string; status: "confirmed" | "possible"; statement: string; reason: string; limits: string; evidence: ChapterEvidence[]}>;
+  chapter_observations: Array<{chapter_id: string; title: string; observations: Array<{dimension: string; statement: string; evidence: ChapterEvidence[]; character_state?: string; lead?: string}>}>;
+  phase_pacing: Array<{phase: string; chapter_count: number; character_count: number; mean_chapter_chars: number; mean_sentence_chars: number}>;
+  coverage?: {chapter_count: number; reviewed_chapter_count: number; first_pass_chapter_count?: number};
+  limitations: string[];
+};
+
 export type WritingLibraryItem = {
   id: string; name: string; genres: string[]; pov: string[]; tone: string[];
   language: string; candidate_count: number; source_sha256?: string; source_mode?: string; created_at: string; version: number;
-  style_count?: number; conflict_count?: number;
+  style_count?: number; conflict_count?: number; source_coverage?: SourceCoverage;
   pov_metadata?: {
     source_pov: string[]; source_status: "known" | "mixed" | "unknown"; source_basis: "profile" | "candidates" | "none";
     target_pov: string[]; target_status: "known" | "partial" | "unknown";
@@ -721,12 +737,18 @@ export async function deleteWritingLibrary(workflowId: string, libraryIds: strin
 }
 
 export async function getWritingLibraryItem(id: string) {
-  return request<{ manifest: WritingLibraryItem; profile: { markdown?: string; documents?: Record<string, string>; limitations?: string[]; upstream?: { repository?: string; commit?: string } }; candidates: { candidates: Array<Record<string, unknown>>; candidates_sha256?: string; style_choices?: ReferenceChoice[]; conflict_choices?: ReferenceChoice[]; conflict_patterns?: Array<Record<string, unknown>> } }>(
+  return request<{ manifest: WritingLibraryItem; profile: { cross_chapter_analysis?: CrossChapterAnalysis; markdown?: string; documents?: Record<string, string>; limitations?: string[]; upstream?: { repository?: string; commit?: string } }; candidates: { candidates: Array<Record<string, unknown>>; candidates_sha256?: string; style_choices?: ReferenceChoice[]; conflict_choices?: ReferenceChoice[]; conflict_patterns?: Array<Record<string, unknown>> } }>(
     `/novel-console/library/${encodeURIComponent(id)}`,
   );
 }
 
 export type ReferenceChoice = {choice_id: string; title: string; kind: "style" | "conflict"; transfer_guidance: string; requires_adaptation: boolean; [key: string]: unknown};
+export function getWritingLibraryExcerpt(id: string, start: number, end: number) {
+  const query = new URLSearchParams({start: String(start), end: String(end)});
+  return request<{source_sha256: string; start: number; end: number; before: string; excerpt: string; after: string}>(
+    `/novel-console/library/${encodeURIComponent(id)}/source-excerpt?${query}`
+  );
+}
 export type WritingLibraryUsage = { status: "available" | "attached" | "adopted"; selected_count: number; style_count?: number; conflict_count?: number; selected_candidate_ids?: string[]; selected_style_ids?: string[]; selected_conflict_ids?: string[]; update_available?: boolean; error?: string };
 export async function getWritingLibraryUsage(workflowId: string, workspace: string) {
   const query = new URLSearchParams({ workflow_id: workflowId, workspace });

@@ -29,7 +29,7 @@ from starlette.concurrency import run_in_threadpool
 from src.config import DATA_DIR, WORKFLOW_WORKSPACES_DIR
 from .workflow_access import _ensure_http_mutation_allowed, _ensure_workflow_writable, _get_manager
 from .novel_assistant import CHARACTER_PURPOSES, NovelAssistantJobs, character_model
-from .novel_library import adopted_writing, enrich_candidates, fingerprint, profile_from_workspace, usage
+from .novel_library import adopted_writing, coverage_summary, enrich_candidates, fingerprint, profile_from_workspace, usage
 from .novel_mechanism_recommender import generate_recommendations_file
 from .novel_reference_choices import with_reference_choices
 from .novel_progress import progress
@@ -164,6 +164,8 @@ class _FanqiePageParser(HTMLParser):
         self._title_depth = 0
         self._book_title_depth = 0
         self._chapter_title_depth = 0
+        self.finished_badge: bool | None = None
+        self.catalog_has_more = False
         self._anchor: dict[str, str] | None = None
         self._class_stack: list[tuple[str, bool, bool, bool, bool]] = []
 
@@ -196,7 +198,7 @@ class _FanqiePageParser(HTMLParser):
             if "chapter-item-title" not in anchor_classes:
                 href = ""
             if href:
-                self._anchor = {"href": href, "text": ""}
+                self._anchor = {"href": href, "text": "", "in_directory": bool(self._chapter_list_depth)}
         if self._content_depth > 0 and self._skip_depth == 0 and tag in {"p", "div", "br"}:
             self.text_parts.append("\n")
 
@@ -228,6 +230,12 @@ class _FanqiePageParser(HTMLParser):
         text = re.sub(r"\s+", " ", data).strip()
         if not text or self._skip_depth:
             return
+        if not self._content_depth and text in {"已完结", "完结"}:
+            self.finished_badge = True
+        if not self._content_depth and text in {"连载中", "连载"}:
+            self.finished_badge = False
+        if not self._content_depth and text in {"下一页", "加载更多章节"}:
+            self.catalog_has_more = True
         if self._title_depth:
             self.title_parts.append(text)
         if self._book_title_depth:
@@ -320,7 +328,6 @@ def _parse_public_page(url: str, html: str) -> dict[str, object]:
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(parser.text_parts)).strip()
     chapters: list[dict[str, object]] = []
     seen: set[str] = set()
-    chapter_pattern = re.compile(r"(?:第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[章节回卷]|chapter\s*[-_ ]?\d+)", re.I)
     for link in parser.links:
         target = urljoin(url, link["href"])
         try:
@@ -331,18 +338,17 @@ def _parse_public_page(url: str, html: str) -> dict[str, object]:
         if target in seen or not parsed.path.startswith("/reader/"):
             continue
         label = re.sub(r"\s+", " ", link.get("text", "")).strip()
-        if not label or not chapter_pattern.search(label + " " + parsed.path):
+        if not label:
             continue
         # The detail page also exposes a "最近更新" link with the same
         # anchor class.  It points to a chapter but is not a directory item.
-        if not re.match(r"^(?:第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[章节回卷]|番外|chapter\s*[-_ ]?\d+)", label, re.I):
+        if not link.get("in_directory") and not re.match(r"^(?:第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[章节回卷]|番外|chapter\s*[-_ ]?\d+)", label, re.I):
             continue
         seen.add(target)
         chapters.append({"index": len(chapters) + 1, "title": label[:160], "url": target, "selected": len(chapters) < 20})
-        if len(chapters) >= 200:
-            break
     private_use = sum(1 for char in text if 0xE000 <= ord(char) <= 0xF8FF)
-    return {"title": title[:200], "text": text, "chapters": chapters, "font_obfuscated": private_use > 0}
+    return {"title": title[:200], "text": text, "chapters": chapters, "font_obfuscated": private_use > 0,
+            "catalog_complete": bool(chapters) and not parser.catalog_has_more, "work_finished": parser.finished_badge}
 
 
 def _fanqie_warnings(pages: list[dict[str, object]]) -> list[str]:
@@ -544,13 +550,15 @@ async def inspect_import_url(payload: UrlInspect):
         "title": parsed["title"],
         "detected_type": "serial_chapters" if parsed["chapters"] else "short_full",
         "chapters": parsed["chapters"],
+        "catalog_complete": parsed["catalog_complete"],
+        "work_finished": parsed["work_finished"],
         "has_page_text": bool(parsed["text"]),
         "warnings": _fanqie_warnings([parsed]),
     }
 
 
 class UrlChapter(BaseModel):
-    index: int = Field(ge=1, le=200)
+    index: int = Field(ge=1)
     title: str = Field(default="", max_length=200)
     url: str = Field(min_length=8, max_length=2000)
 
@@ -560,7 +568,7 @@ class UrlImport(BaseModel):
     workspace: str
     url: str = Field(min_length=8, max_length=2000)
     source_mode: str = "auto"
-    chapters: list[UrlChapter] = Field(default_factory=list, max_length=200)
+    chapters: list[UrlChapter] = Field(default_factory=list)
 
 
 @router.post("/import-url/fetch")
@@ -568,13 +576,29 @@ async def import_url(payload: UrlImport, request: Request):
     """抓取用户确认的公开页面并写入当前作品 references。"""
     _ensure_http_mutation_allowed(request, payload.workflow_id)
     mgr = _ensure_workflow_writable(request, payload.workflow_id)
-    if payload.source_mode not in {"auto", "short_full", "serial_chapters"}:
+    if payload.source_mode not in {"auto", "short_full", "serial_chapters", "serial_full"}:
         raise HTTPException(400, "参考语料类型无效")
     root = mgr._ws_manager.resolve_workflow_workspace(payload.workflow_id, override=payload.workspace).resolve()
     require_manual_control(request, root)
     source_url = _validate_fanqie_url(payload.url)
-    selected = payload.chapters[:200]
+    selected = payload.chapters
+    mode = payload.source_mode
+    catalog = {}
+    if mode == "serial_full" or (mode == "auto" and selected and urlparse(source_url).path.startswith("/page/")):
+        catalog_url, catalog_html = await _fetch_public_page(source_url)
+        catalog = _parse_public_page(catalog_url, catalog_html)
+        directory = [UrlChapter(**item) for item in catalog["chapters"]]
+        all_selected = [(c.index, c.url) for c in sorted(selected, key=lambda c: c.index)] == [(c.index, c.url) for c in directory]
+        if mode == "serial_full":
+            if catalog["work_finished"] is False or not catalog["catalog_complete"] or (selected and not all_selected):
+                raise HTTPException(400, "长篇全文需要完整可读的目录及全部章节；部分章节请按长篇章节样本导入")
+            selected = directory
+        elif all_selected and catalog["catalog_complete"] and catalog["work_finished"]:
+            mode, selected = "serial_full", directory
+    if mode == "auto" and selected:
+        mode = "serial_chapters"
     pages: list[dict[str, object]] = []
+    text_chars = 0
     if selected:
         for chapter in selected:
             chapter_url = _validate_fanqie_url(urljoin(source_url, chapter.url))
@@ -583,13 +607,22 @@ async def import_url(payload: UrlImport, request: Request):
             final_url, html = await _fetch_public_page(chapter_url)
             parsed = _parse_public_page(final_url, html)
             if not parsed["text"]:
+                if mode == "serial_full":
+                    raise HTTPException(400, f"第 {chapter.index} 章正文不可读，未保存为全文")
                 continue
+            if mode == "serial_full" and urlparse(final_url).path != urlparse(chapter_url).path:
+                raise HTTPException(400, f"第 {chapter.index} 章未返回目录对应的正文")
+            text_chars += len(parsed["text"])
+            if text_chars > 10_000_000:
+                raise HTTPException(413, "导入文本超过一千万字符，请分卷导入")
             pages.append({"index": chapter.index, "title": chapter.title or parsed["title"], "url": final_url, "text": parsed["text"], "font_obfuscated": parsed.get("font_obfuscated", False)})
     else:
         final_url, html = await _fetch_public_page(source_url)
         parsed = _parse_public_page(final_url, html)
         if not parsed["text"]:
             raise HTTPException(400, "网页中没有可读取的正文文本")
+        if mode == "auto" and urlparse(final_url).path.startswith("/reader/"):
+            mode = "serial_chapters"
         pages.append({"index": 1, "title": parsed["title"] or "网页正文", "url": final_url, "text": parsed["text"], "font_obfuscated": parsed.get("font_obfuscated", False)})
     if not pages:
         raise HTTPException(400, "没有抓取到可用章节正文")
@@ -599,16 +632,19 @@ async def import_url(payload: UrlImport, request: Request):
     corpus_path = safe_target(root, "references/url-imported-corpus.txt")
     manifest_path = safe_target(root, "references/url-import.json")
     warnings = _fanqie_warnings(pages)
-    manifest = {"source_url": source_url, "source_mode": payload.source_mode, "chapters": [{key: page[key] for key in ("index", "title", "url")} for page in pages], "imported_at": datetime.now(timezone.utc).isoformat(), "characters": len(content), "warnings": warnings}
+    manifest = {"source_url": source_url, "source_mode": mode, "chapters": [{key: page[key] for key in ("index", "title", "url")} for page in pages],
+                "corpus_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "catalog_complete": catalog.get("catalog_complete"), "work_finished": catalog.get("work_finished"),
+                "imported_at": datetime.now(timezone.utc).isoformat(), "characters": len(content), "warnings": warnings}
     with _lock:
         corpus_path.parent.mkdir(parents=True, exist_ok=True)
         corpus_path.write_text(content, encoding="utf-8")
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return {"success": True, "path": "references/url-imported-corpus.txt", "manifest_path": "references/url-import.json", "title": pages[0]["title"], "chapter_count": len(pages), "characters": len(content), "warnings": warnings}
+    return {"success": True, "source_mode": mode, "path": "references/url-imported-corpus.txt", "manifest_path": "references/url-import.json", "title": catalog.get("title") or pages[0]["title"], "chapter_count": len(pages), "characters": len(content), "warnings": warnings}
 
 
 @router.get("/library")
-async def list_writing_library():
+async def list_writing_library(source_mode: Literal["short_full", "serial_chapters", "serial_full", "unknown"] | None = None):
     """列出跨作品可复用的写法蒸馏结果。"""
     metadata_for = _library_metadata_service()
     with _lock:
@@ -620,8 +656,13 @@ async def list_writing_library():
             manifest = read_json_file(folder / "manifest.json", {})
             if not isinstance(manifest, dict) or not manifest.get("id"):
                 continue
+            mode = manifest.get("source_mode")
+            if source_mode and source_mode != (mode if mode in {"short_full", "serial_chapters", "serial_full"} else "unknown"):
+                continue
             choices = with_reference_choices(read_json_file(folder / "candidates.json", {}))
             metadata = metadata_for(manifest, read_json_file(folder / "profile.json", {}), choices)
+            if isinstance(metadata.get("source_coverage"), dict):
+                metadata = {**metadata, "source_coverage": coverage_summary(metadata["source_coverage"])}
             items.append({**metadata, "style_count": len(choices["style_choices"]), "conflict_count": len(choices["conflict_choices"])})
     return {"items": items}
 
@@ -722,6 +763,25 @@ async def get_writing_library_item(library_id: str, request: Request, workspace:
             pass
 
     return result
+
+
+@router.get("/library/{library_id}/source-excerpt")
+def get_library_source_excerpt(library_id: str, start: int, end: int):
+    """Resolve an evidence offset against the original verified library snapshot."""
+    if not 0 <= start < end <= start + 2000:
+        raise HTTPException(400, "原文范围须为 1–2000 个字符")
+    folder = library_path(library_id)
+    manifest = read_json_file(folder / "manifest.json", {})
+    raw = read_json_file(folder / "source.json", None)
+    if not isinstance(raw, str):
+        raise HTTPException(404, "这份资料没有可回查的原文快照")
+    sha = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    if sha != manifest.get("source_sha256"):
+        raise HTTPException(409, "原文快照与这次分析的来源不一致")
+    if end > len(raw):
+        raise HTTPException(400, "原文范围超出快照")
+    return {"source_sha256": sha, "start": start, "end": end, "excerpt": raw[start:end],
+            "before": raw[max(0, start - 180):start], "after": raw[end:end + 180]}
 
 
 @router.get("/library-usage")
@@ -894,6 +954,26 @@ def _cleanup_library_references(mgr, deleted_ids: set[str]):
         pass
 
 
+def _has_chapter_evidence(note: dict, chapter: dict, source: str) -> bool:
+    start, end = chapter.get("start"), chapter.get("end")
+    if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(source):
+        return False
+    observations = note.get("observations")
+    if not isinstance(observations, list) or not observations:
+        return False
+    for observation in observations:
+        evidence = observation.get("evidence") if isinstance(observation, dict) else None
+        if not isinstance(evidence, list) or not evidence:
+            return False
+        for proof in evidence:
+            if not isinstance(proof, dict) or proof.get("chapter_id") != chapter["id"]:
+                return False
+            a, b = proof.get("source_start"), proof.get("source_end")
+            if type(a) is not int or type(b) is not int or not start <= a < b <= end or source[a:b] != proof.get("excerpt"):
+                return False
+    return True
+
+
 @router.post("/library/publish")
 async def publish_writing_library(payload: LibraryPublish, request: Request):
     """把当前书工作区中已校验的蒸馏结果保存为可复用的库条目。"""
@@ -911,6 +991,42 @@ async def publish_writing_library(payload: LibraryPublish, request: Request):
     new_profile = profile_from_workspace(root)
     if new_profile.get("source_sha256") and new_profile["source_sha256"] != source_sha256:
         raise HTTPException(400, "风格分析与候选来源不一致，请完成本次蒸馏后再保存")
+    source_mode = new_profile.get("source_mode") or candidates.get("source_mode") or "auto"
+    coverage = new_profile.get("source_coverage")
+    source_text = None
+    if source_mode == "serial_full" or candidates.get("source_mode") == "serial_full":
+        chapters = coverage.get("chapters") if isinstance(coverage, dict) else None
+        ids = [ch.get("id") if isinstance(ch, dict) else None for ch in chapters] if isinstance(chapters, list) else []
+        report = new_profile.get("cross_chapter_analysis")
+        report_scope = report.get("coverage") if isinstance(report, dict) else None
+        report_scope = report_scope if isinstance(report_scope, dict) else {}
+        targeted = "first_pass_chapter_count" in report_scope
+        reviewed = report_scope.get("reviewed_chapter_count")
+        notes = report.get("chapter_observations") if targeted else None
+        report_complete = (
+            report_scope["first_pass_chapter_count"] == len(ids)
+            and type(reviewed) is int and 0 <= reviewed <= len(ids)
+            and isinstance(notes, list)
+            and [item.get("chapter_id") if isinstance(item, dict) else None for item in notes] == ids
+        ) if targeted else reviewed == len(ids)
+        if (source_mode != "serial_full" or not ids or not all(isinstance(cid, str) and cid for cid in ids)
+                or new_profile.get("source_sha256") != source_sha256 or len(ids) != len(set(ids))
+                or ids != coverage.get("analyzed_chapters") or coverage.get("missing_chapters")
+                or not coverage.get("complete") or coverage.get("numbering_gaps")
+                or coverage.get("whole_book_eligible") is False or not isinstance(report, dict)
+                or report.get("source_sha256") != source_sha256
+                or not report_complete
+                or not new_profile.get("markdown", "").strip()):
+            raise HTTPException(409, "长篇全文的章节覆盖或跨章分析尚未完成，请先续跑蒸馏")
+        if not isinstance(source_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", source_sha256):
+            raise HTTPException(409, "长篇全文缺少可信的来源标识")
+        snapshot = safe_target(root, f"learning/sources/{source_sha256}.txt")
+        source_text = snapshot.read_text(encoding="utf-8") if snapshot.is_file() else None
+        if source_text is None or hashlib.sha256(source_text.encode()).hexdigest() != source_sha256:
+            raise HTTPException(409, "跨章分析依赖的原文快照缺失或已有改动")
+        if targeted and not all(_has_chapter_evidence(note, chapter, source_text)
+                                for note, chapter in zip(notes, chapters, strict=True)):
+            raise HTTPException(409, "首轮分析缺少可定位到对应章节的原文证据")
     with _lock:
         if payload.automatic:
             task_data = mgr.get_task(payload.workflow_id, payload.task_id) if payload.task_id else None
@@ -939,6 +1055,8 @@ async def publish_writing_library(payload: LibraryPublish, request: Request):
         for item in _library_root.iterdir() if _library_root.exists() else []:
             manifest = read_json_file(item / "manifest.json", {}) if item.is_dir() else {}
             if source_sha256 and manifest.get("source_sha256") == source_sha256:
+                if (source_mode == "serial_full") != (manifest.get("source_mode") == "serial_full"):
+                    continue
                 existing_folder = item
                 break
         if existing_folder:
@@ -969,7 +1087,11 @@ async def publish_writing_library(payload: LibraryPublish, request: Request):
         manifest.update(candidate_count=len(candidates["candidates"]),
                         conflict_count=len(candidates.get("conflict_patterns", [])),
                         has_style_profile=bool(profile.get("markdown", "").strip()),
-                        source_mode=profile.get("source_mode", "auto"))
+                        source_mode=profile.get("source_mode", source_mode))
+        if isinstance(coverage, dict):
+            manifest["source_coverage"] = coverage
+        if source_text is not None:
+            atomic_json(folder / "source.json", source_text)
         atomic_json(folder / "candidates.json", candidates)
         atomic_json(folder / "profile.json", profile)
         atomic_json(folder / "manifest.json", manifest)

@@ -7,6 +7,8 @@ import {
 import { useDialog } from "./ui/use-dialog";
 import WritingLibraryReader from "./WritingLibraryReader";
 import WritingLibraryViewpoints from "./WritingLibraryViewpoints";
+import ReferencePages from "./ReferencePages";
+import { coverageSummary, sourceType, sourceTypes } from "../lib/reference-source";
 
 type Props = {
   project: { values: Record<string, string> };
@@ -21,6 +23,7 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
   const dialog = useDialog();
   const [items, setItems] = useState<WritingLibraryItem[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [usageLoading, setUsageLoading] = useState(true);
   const [attachingId, setAttachingId] = useState("");
@@ -32,7 +35,8 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
   const operation = useRef(false);
   const mounted = useRef(true);
   const requestVersion = useRef(0);
-  const allSelected = items.length > 0 && items.every(item => selected.includes(item.id));
+  const visible = items.filter(item => filter === "all" || sourceType(item.source_mode) === filter);
+  const allSelected = visible.length > 0 && visible.every(item => selected.includes(item.id));
   const busy = loading || deleting || !!attachingId;
 
   useEffect(() => {
@@ -165,11 +169,17 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
     </div>
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3" aria-label="写法库批量操作">
       <div className="flex flex-wrap items-center gap-3 text-sm">
+        <label className="flex items-center gap-2">来源类型
+          <select aria-label="筛选来源类型" value={filter} disabled={busy} onChange={event => { setFilter(event.target.value); setSelected([]); }} className="rounded-lg border border-border bg-background px-2 py-2">
+            <option value="all">全部类型</option>
+            {Object.entries(sourceTypes).map(([mode, label]) => <option key={mode} value={mode}>{label}</option>)}
+          </select>
+        </label>
         <label className="flex min-h-10 cursor-pointer items-center gap-2">
-          <input type="checkbox" aria-label="全选写法" checked={allSelected} disabled={busy || !items.length} onChange={event => setSelected(event.target.checked ? items.map(item => item.id) : [])} className="h-4 w-4 accent-primary" />
+          <input type="checkbox" aria-label="全选写法" checked={allSelected} disabled={busy || !visible.length} onChange={event => setSelected(event.target.checked ? visible.map(item => item.id) : [])} className="h-4 w-4 accent-primary" />
           全选
         </label>
-        <span className="text-muted-foreground">共 {items.length} 份 · 已选 {selected.length} 份</span>
+        <span className="text-muted-foreground">共 {visible.length} 份 · 已选 {selected.length} 份</span>
         {selected.length > 0 && <button disabled={busy} onClick={() => setSelected([])} className="min-h-10 px-1 text-primary disabled:opacity-50">清空选择</button>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -180,7 +190,8 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
     {loading && <p role="status" className="text-sm text-muted-foreground">正在读取写法库…</p>}
     {notices}
     {!loading && !items.length && !error && <div className="rounded-2xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">还没有共享写法。完成一次独立资料蒸馏后，会自动保存到这里。</div>}
-    <div className="grid gap-4 md:grid-cols-2">{items.map(item => {
+    {!loading && !!items.length && !visible.length && <p role="status" className="p-6 text-sm text-muted-foreground">写法库中还没有此类型的资料。</p>}
+    <ReferencePages key={filter} items={visible}>{page => <div className="grid gap-4 md:grid-cols-2">{page.map(item => {
       const applicabilityKnown = item.pov_metadata?.target_status === "known";
       const match = knownPov && applicabilityKnown && item.pov_metadata!.target_pov.includes(pov) && (!genre || item.genres.length === 0 || item.genres.some(tag => genre.includes(tag) || tag.includes(genre)));
       const usage = usageById[item.id];
@@ -193,6 +204,10 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
           </label>
           <button aria-label={`删除写法：${item.name}`} title="删除这份写法" disabled={busy} onClick={() => void remove([item.id])} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"><Trash2 className="h-4 w-4" /></button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span aria-label="来源类型" className="rounded-full bg-primary/10 px-2 py-1 text-primary">{sourceTypes[sourceType(item.source_mode)]}</span>
+          <span className="text-muted-foreground">{coverageSummary(item.source_coverage)}</span>
+        </div>
         <WritingLibraryViewpoints metadata={item.pov_metadata} />
         <div className="mt-4 flex items-start gap-2"><span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-xs">{!knownPov ? "本书视角待设置" : !applicabilityKnown ? "适用视角待核对" : match ? "初步匹配" : "需要适配"}</span><p className="text-xs leading-6 text-muted-foreground">{match ? "可作为候选来源，风格、写法与冲突的适用性仍需逐条确认。" : "请结合本书视角与题材逐条检查写法；原作叙事视角与写法适用视角分别记录。"}</p></div>
         <button disabled={busy} onClick={() => { setReadingId(item.id); setFeedback(""); setError(""); }} className="mt-4 w-full rounded-xl border border-border px-3 py-2.5 text-sm hover:bg-secondary/60 disabled:opacity-50">查看具体写法</button>
@@ -200,6 +215,6 @@ export default function WritingLibraryView({ project, workflowId, workspace, onA
         {usage?.update_available && <button disabled={busy || usageLoading} onClick={() => void attach(item.id, true)} className="mt-3 text-sm text-primary disabled:opacity-50">更新本书候选与分析</button>}
         {attached && <button disabled={busy} onClick={() => onConfirm(usage.status === "adopted")} className="mt-3 text-sm text-primary disabled:opacity-50">{usage.status === "adopted" ? "查看已采用写法 / 选择新增 →" : "继续兼容检查与采用确认 →"}</button>}
       </article>;
-    })}</div>
+    })}</div>}</ReferencePages>
   </div>;
 }

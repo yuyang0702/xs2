@@ -1,13 +1,36 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import src.agent.session as session_module
 from src.agent.session import AgentSession, _persistence_manager
 from src.workflow.execution_loop import WorkflowLoopMixin
+from src.workflow.definition import WorkflowDef, WorkflowGateway, WorkflowEdge
 from src.workflow.runtime_models import NodeExecutionState
+
+
+def test_loop_body_starts_at_explicit_condition_gateway():
+    mixin = WorkflowLoopMixin()
+    mixin._execute_node_sequence = AsyncMock(return_value="completed")
+    definition = WorkflowDef.from_dict({
+        "workflow_id": "book",
+        "nodes": [{"id": node, "node_type": "agent"} for node in ("legacy", "fast")],
+        "gateways": [{"id": "choose", "gateway_type": "condition"}],
+        "edges": [
+            {"source": "choose", "target": "legacy", "condition": {"is_default": True}},
+            {"source": "choose", "target": "fast", "condition": {"expression": "{{batch_mode}}==yes"}},
+        ],
+    })
+    task = SimpleNamespace(parameter_values={"batch_mode": "yes"}, node_states={})
+    result = asyncio.run(mixin._execute_loop_body(
+        definition, task, ["legacy", "fast"], set(), None, "loop",
+        Mock(), False, None, entry_node_id="choose",
+    ))
+    assert result == "completed"
+    assert [call.kwargs["node_ids"] for call in mixin._execute_node_sequence.await_args_list] == [["fast"]]
 
 
 def test_loop_iteration_snapshots_and_resets_rejection_budget():
@@ -206,6 +229,7 @@ def test_force_save_remains_tolerant_but_dirty_after_failure():
 def test_loop_gateway_rejects_oversized_sequence_without_truncation():
     mixin = WorkflowLoopMixin()
     definition = SimpleNamespace(
+        get_gateway=lambda _: None,
         edges=[
             SimpleNamespace(
                 source="gateway",
@@ -242,3 +266,29 @@ def test_loop_gateway_rejects_oversized_sequence_without_truncation():
 
     assert result == "failed"
     assert task.node_states == {}
+
+
+def test_explicit_finite_list_can_resume_beyond_one_hundred():
+    gateway = WorkflowGateway.from_dict({"id":"g","gateway_type":"loop","max_list_iterations":250})
+    assert WorkflowGateway.from_dict(gateway.to_dict()) == gateway
+    definition = WorkflowDef(workflow_id="book", gateways=[gateway], edges=[
+        WorkflowEdge(source="g",target="agent",condition={"expression":"for item in jobs"})])
+    task = SimpleNamespace(task_id="run", parameter_values={}, node_states={},
+        control_flow_state={"loops":{"g":{"mode":"list","items":list(range(120)),
+                                          "next_index":100,"phase":"ready"}}})
+    seen=[]
+    async def body(**kwargs):
+        seen.append(int(task.parameter_values["item"]))
+        state=task.node_states["agent"]
+        state.status="completed"
+        state.outputs={"prior":"large evidence packet"}
+        return "completed"
+    runner=WorkflowLoopMixin()
+    runner._save_task_state=AsyncMock()
+    runner._push_wf_task_update=Mock()
+    runner._execute_loop_body=body
+    runner._reset_node_for_loop_iteration=AsyncMock()
+    step={"gateway_id":"g","loop_body_nodes":["agent"],"continue_target":"agent","exit_target":"done"}
+    outcome=asyncio.run(runner._execute_loop_gateway(definition,task,step,set(),None,"",None,False,None))
+    assert outcome=="completed" and seen==list(range(100,120))
+    assert all(not item["outputs"] for item in task.node_states["agent"].iteration_history)

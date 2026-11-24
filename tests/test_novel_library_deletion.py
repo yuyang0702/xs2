@@ -1,6 +1,7 @@
 """Shared-library deletion must leave book-owned snapshots usable."""
 from datetime import datetime, timedelta, timezone
 import json
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -55,6 +56,55 @@ def delete(client, ids):
     return client.post("/api/novel-console/library/delete", json={
         "workflow_id": "test", "library_ids": ids,
     })
+
+
+def test_whole_book_publication_filter_and_source_recheck(library_client):
+    client, library, book, _, _ = library_client
+    entry(library, "legacy")
+    raw = "第一章 雪\n她没有给钥匙。\n第二章 风\n她把钥匙交出去了。"
+    sha = hashlib.sha256(raw.encode()).hexdigest()
+    source = book / "learning/sources" / (sha + ".txt")
+    source.parent.mkdir(parents=True)
+    source.write_text(raw, encoding="utf-8")
+    chapters = [{"id":"chapter-0001","title":"雪","start":0,"end":raw.index("第二章")},
+                {"id":"chapter-0002","title":"风","start":raw.index("第二章"),"end":len(raw)}]
+    coverage = {"complete":True, "chapters":chapters, "analyzed_chapters":[ch["id"] for ch in chapters],
+                "missing_chapters":[], "window_count":2, "analyzed_window_count":2}
+    evidence = {"source_sha256":sha, "coverage":{"chapter_count":2,"reviewed_chapter_count":2}}
+    profile = {"source_sha256":sha,"source_mode":"serial_full","source_coverage":coverage,
+               "cross_chapter_analysis":evidence}
+    save(book / "learning/candidates.json", {"source":{"text_sha256":sha},"candidates":[], "source_mode":"serial_full"})
+    save(book / "learning/dna/profile.json", profile)
+    (book / "learning/reference_profile.md").write_text("短述全书",encoding="utf-8")
+    payload = {"workflow_id":"test","workspace":str(book),"name":"my-book"}
+    assert client.post("/api/novel-console/library/publish",json=payload).status_code==200
+    path = "/api/novel-console/library"
+    listed = client.get(path,params={"source_mode":"serial_full"}).json()["items"]
+    assert [row["id"] for row in listed]==["my-book"]
+    assert listed[0]["source_coverage"]["chapter_count"]==2
+    assert "chapters" not in listed[0]["source_coverage"]
+    detail = client.get(path+"/my-book").json()
+    assert detail["manifest"]["source_coverage"]["chapters"]==chapters
+    assert detail["profile"]["cross_chapter_analysis"]==evidence
+    excerpt = client.get(path+"/my-book/source-excerpt",params={"start":raw.index("她把"),"end":len(raw)}).json()
+    assert excerpt["excerpt"]=="她把钥匙交出去了。" and excerpt["source_sha256"]==sha
+    assert client.get(path+"/my-book/source-excerpt",params={"start":-1,"end":1}).status_code==400
+    profile["source_coverage"]["analyzed_chapters"]=[]
+    save(book / "learning/dna/profile.json",profile)
+    assert client.post(path+"/publish",json=payload).status_code==409
+    assert client.get(path+"/my-book").json()==detail
+
+    coverage["analyzed_chapters"] = [ch["id"] for ch in chapters]
+    evidence["coverage"].update(first_pass_chapter_count=2, reviewed_chapter_count=1)
+    evidence["chapter_observations"] = [{"chapter_id": ch["id"], "observations":[{
+        "dimension":"plot", "statement":"钥匙的归属影响了行动", "evidence":[
+            {"chapter_id":ch["id"], "source_start":ch["start"], "source_end":ch["end"],
+             "excerpt":raw[ch["start"]:ch["end"]]}]}]} for ch in chapters]
+    save(book / "learning/dna/profile.json", profile)
+    assert client.post(path+"/publish",json={**payload,"name":"batched"}).status_code==200
+    evidence["chapter_observations"].pop()
+    save(book / "learning/dna/profile.json", profile)
+    assert client.post(path+"/publish",json={**payload,"name":"incomplete"}).status_code==409
 
 
 def test_batch_physically_deletes_entries_but_preserves_adopted_book(library_client):

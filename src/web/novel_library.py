@@ -95,3 +95,12 @@ def profile_from_workspace(root):
     file = root / "learning/reference_profile.md"
     markdown = file.read_text(encoding="utf-8-sig") if file.is_file() else ""
     return {**structured, "markdown": markdown}
+
+
+def coverage_summary(coverage):
+    """Return library-card counts without serializing the entire chapter directory."""
+    return {**{k: v for k, v in coverage.items() if k in {
+                "complete", "window_count", "analyzed_window_count", "completeness_basis"}},
+            "chapter_count": len(coverage.get("chapters", [])),
+            "analyzed_chapter_count": len(coverage.get("analyzed_chapters", [])),
+            "missing_chapter_count": len(coverage.get("missing_chapters", []))}
