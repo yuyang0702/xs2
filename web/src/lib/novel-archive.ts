@@ -51,7 +51,7 @@ export function archiveScalar(value: unknown, key = ""): string {
   if (typeof value === "boolean") return value ? "是" : "否";
   const text = String(value);
   if (/[\u3400-\u9fff]/.test(key)) key = Object.keys(FIELD_LABELS).find(field => FIELD_LABELS[field] === key) || key;
-  const choices: Record<string, string> = { first_person: "第一人称", third_person: "第三人称", short_full: "短篇全文", serial_opening: "长篇开局", serial_chapter: "长篇章节", serial_arc: "长篇当前卷", serial_chapters: "长篇章节样本", general: "通用", continue: "普通连载章节", book_final: "本书终章" };
+  const choices: Record<string, string> = { first_person: "第一人称", third_person: "第三人称", short_full: "短篇全文", serial_opening: "长篇开局", serial_chapter: "长篇章节", serial_arc: "长篇当前卷", serial_chapters: "长篇章节样本", serial_full: "长篇全文", general: "通用", continue: "普通连载章节", book_final: "本书终章" };
   const statuses: Record<string, string> = { pending: "待推进", open: "未解决", active: "推进中", planted: "已埋设", triggered: "已触发", resolved: "已解决", paid: "已偿还", closed: "已回收", overdue: "已超期", suspended: "暂时悬置" };
   const fieldChoices: Record<string, Record<string, string>> = {
     layer: { language: "语言", structure: "结构", narrative_lens: "叙事镜头", dialogue: "对话", imagery: "意象", theme: "主题", character: "人物写法" },

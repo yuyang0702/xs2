@@ -82,7 +82,7 @@ def integration(tmp_path_factory, monkeypatch):
 
     # Deliberately rename the script group; adapters must use enabled ownership.
     plugin_root = tmp_path / "plugin-scripts"
-    for name in ("console_service", "reference_distill"):
+    for name in ("console_service", "reference_distill", "prose_policy"):
         shutil.copytree(PLUGIN / "resources/script-library/xs2" / name,
                         plugin_root / "renamed-group" / name,
                         ignore=shutil.ignore_patterns("__pycache__"))

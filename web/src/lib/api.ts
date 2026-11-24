@@ -682,8 +682,25 @@ export function saveNovelZhuqueOptions(workflowId: string, workspace: string, op
   });
 }
 
+export type NovelPresentation = {
+  synopsis?: string;
+  logline?: string;
+  cover_version?: string;
+  opening?: string;
+};
+
 export async function listNovelProjects() {
-  return request<{ projects: Array<{ workspace: string; state: Record<string, unknown>; progress?: NovelProgress }> }>("/novel-console/projects");
+  return request<{ projects: Array<{ workspace: string; state: Record<string, unknown>; progress?: NovelProgress; presentation?: NovelPresentation }> }>("/novel-console/projects");
+}
+
+export function getNovelPresentation(workflowId: string, workspace: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace });
+  return request<NovelPresentation>(`/novel-console/presentation?${query}`);
+}
+
+export function novelCoverUrl(workflowId: string, workspace: string, version: string) {
+  const query = new URLSearchParams({ workflow_id: workflowId, workspace, v: version });
+  return `/api/novel-console/presentation/cover?${query}`;
 }
 
 export async function deleteNovelProject(workflowId: string, workspace: string) {

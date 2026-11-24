@@ -101,7 +101,10 @@ async def run_resumable(node, ctx, view_path, view, identity):
     existing = progress.rows()
     adapter = PluginAdapter(ctx, standalone=True)
     protected = view.get("book_contract", {}).get("protected_phrases", [])
+    contextual = all("literal_candidates" in unit.get("lieflat_review", {}) for unit in progress.units.values())
     async def scan(texts, marks=None):
+        if contextual:
+            return dict.fromkeys(texts, ())
         return await adapter("local-tone", "", texts=texts, original_marks=marks or {}, protected_phrases=protected)
     marks = await scan({key: unit["old"] for key, unit in progress.units.items()})
     if existing:
@@ -118,8 +121,9 @@ async def run_resumable(node, ctx, view_path, view, identity):
     for key, unit in progress.units.items():
         if key in existing:
             continue
-        local_review = {**unit.get("lieflat_review", {}), "mandatory_phrases":marks[key],
-                        "guidance":"明确标记须保留原意、数字、人物口吻换个说法。"}
+        local_review = dict(unit.get("lieflat_review", {}))
+        if not contextual:
+            local_review.update(mandatory_phrases=marks[key], guidance="明确标记须保留原意、数字、人物口吻换个说法。")
         try:
             for attempt in range(3):
                 prompt, choices = progress.prompt({**unit, "lieflat_review":local_review})

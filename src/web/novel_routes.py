@@ -493,6 +493,49 @@ async def list_projects():
     return await run_in_threadpool(_list_projects)
 
 
+def project_presentation(root: Path, *, opening: bool = False) -> dict:
+    metadata = read_json_file(safe_target(root, "meta/presentation.json"), {})
+    if not isinstance(metadata, dict):
+        return {}
+    presentation = {
+        key: value.strip()
+        for key in ("synopsis", "logline")
+        if isinstance(value := metadata.get(key), str) and value.strip()
+    }
+    cover = safe_target(root, "meta/cover.png")
+    if cover.is_file():
+        presentation["cover_version"] = str(cover.stat().st_mtime_ns)
+    if opening and (count := metadata.get("opening_paragraphs")) and type(count) is int:
+        chapter = safe_target(root, "story/0001/chapter.md")
+        if chapter.is_file() and 1 <= count <= 5:
+            paragraphs = re.split(r"\n[ \t]*\n", chapter.read_text(encoding="utf-8-sig").strip())
+            state = read_json_file(root / _manifest, {})
+            title = state.get("title", "") if isinstance(state, dict) else ""
+            if paragraphs and paragraphs[0].lstrip("# ").strip() == title:
+                paragraphs = paragraphs[1:]
+            presentation["opening"] = "\n\n".join(paragraphs[:count])
+    return presentation
+
+
+@router.get("/presentation")
+def get_project_presentation(request: Request, workflow_id: str, workspace: str):
+    from .humanware_routes import character_workspace
+    root = character_workspace(request, workflow_id, workspace)
+    return project_presentation(root, opening=True)
+
+
+@router.get("/presentation/cover")
+def get_project_cover(request: Request, workflow_id: str, workspace: str):
+    from .humanware_routes import character_workspace
+    root = character_workspace(request, workflow_id, workspace)
+    cover = safe_target(root, "meta/cover.png")
+    if not cover.is_file():
+        raise HTTPException(404, "此作品尚未设置封面")
+    return FileResponse(cover, media_type="image/png", headers={
+        "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff",
+    })
+
+
 def _list_projects():
     projects = []
     try:
@@ -513,6 +556,9 @@ def _list_projects():
         else:
             continue
         item = {"workspace": str(root), "state": state}
+        presentation = project_presentation(root)
+        if presentation:
+            item["presentation"] = presentation
         if progress_service:
             item["progress"] = progress(root, state, DATA_DIR / "workflows",
                                         include_details=False, service=progress_service)
